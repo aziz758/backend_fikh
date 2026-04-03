@@ -5,6 +5,8 @@ from app.models.request import Request, RequestService
 from app.models.review import Review
 from app.models.rating import Rating
 from app.models.otp import OtpVerification
+from app.models.notification import Notification
+from app.models.request_assignment import RequestAssignment
 
 __all__ = [
     "Customer",
@@ -16,4 +18,6 @@ __all__ = [
     "Review",
     "Rating",
     "OtpVerification",
+    "Notification",
+    "RequestAssignment",
 ]

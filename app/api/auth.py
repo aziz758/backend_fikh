@@ -14,7 +14,7 @@ from app.schemas.customer import CustomerCreate
 from app.schemas.technician import TechnicianCreate
 from app.models import Customer, Technician
 from app.models.technician import TechnicianService
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_user, get_current_user_id
 from app.services.auth_service import (
     hash_password,
     verify_password,
@@ -96,6 +96,7 @@ def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
         name=body.name,
         phone=body.phone,
         password_hash=hash_password(body.password),
+        availability_status="available",
     )
     db.add(tech)
     db.commit()
@@ -181,3 +182,27 @@ def change_password(
     user.password_hash = hash_password(body.new_password)
     db.commit()
     return {"message": "تم تغيير كلمة المرور بنجاح"}
+
+@router.post("/update-fcm-token")
+def update_fcm_token(
+    body: dict,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update FCM token for push notifications."""
+    fcm_token = body.get("fcm_token")
+    if not fcm_token:
+        raise HTTPException(status_code=400, detail="fcm_token required")
+
+    if current_user["type"] == "customer":
+        user = db.query(Customer).filter(Customer.id == current_user["id"]).first()
+    elif current_user["type"] == "technician":
+        user = db.query(Technician).filter(Technician.id == current_user["id"]).first()
+    else:
+        user = None
+
+    if user:
+        user.fcm_token = fcm_token
+        db.commit()
+
+    return {"success": True}

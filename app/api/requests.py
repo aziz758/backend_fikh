@@ -1,26 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+﻿from datetime import datetime, timedelta
 
-from app.database import get_db
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_current_user_id, require_customer, require_technician
+from app.database import SessionLocal, get_db
+from app.models import Rating, Request, RequestService, Technician
+from app.models.request_assignment import RequestAssignment
 from app.schemas.request_schema import RequestCreate, RequestResponse
-from app.models import Request, RequestService
-from app.api.dependencies import require_customer, require_technician, get_current_user_id
-from app.models import Technician, TechnicianService, Rating
+from app.services.assignment_service import find_best_technician, schedule_assignment_timeout
 
 router = APIRouter(prefix="/requests", tags=["requests"])
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    import math
-
-    R = 6371.0
-    lat1, lng1, lat2, lng2 = map(math.radians, [lat1, lng1, lat2, lng2])
-    dlat = lat2 - lat1
-    dlng = lng2 - lng1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
 
 
 def _avg_rating(db: Session, technician_id: int) -> float:
@@ -55,37 +46,6 @@ def _serialize_request(db: Session, req: Request) -> dict:
     }
 
 
-def _choose_technician_for_request(
-    db: Session,
-    service_id: int,
-    customer_lat: float | None,
-    customer_lng: float | None,
-) -> Technician | None:
-    techs = (
-        db.query(Technician)
-        .join(TechnicianService, TechnicianService.technician_id == Technician.id)
-        .filter(
-            TechnicianService.service_id == service_id,
-            Technician.status == "available",
-        )
-        .all()
-    )
-    if not techs:
-        return None
-
-    scored: list[tuple[float, float, Technician]] = []
-    for t in techs:
-        avg = _avg_rating(db, t.id)
-        dist = 0.0
-        if customer_lat is not None and customer_lng is not None and t.lat is not None and t.lng is not None:
-            dist = _haversine_km(customer_lat, customer_lng, t.lat, t.lng)
-        scored.append((avg, dist, t))
-
-    # الأعلى تقييماً ثم الأقرب
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    return scored[0][2]
-
-
 @router.get("/", response_model=list[RequestResponse])
 def list_my_requests(
     creds=Depends(get_current_user_id),
@@ -110,7 +70,7 @@ def create_request(
     db: Session = Depends(get_db),
     customer_id: int = Depends(require_customer),
 ):
-    req = Request(
+    new_request = Request(
         customer_id=customer_id,
         note=body.note,
         image_url=body.image_url,
@@ -118,35 +78,62 @@ def create_request(
         lng=body.lng,
         address=body.address,
     )
-    db.add(req)
+    db.add(new_request)
     db.commit()
-    db.refresh(req)
+    db.refresh(new_request)
+
     for i, sid in enumerate(body.service_ids):
         sname = None
         if body.service_type_names and i < len(body.service_type_names):
             sname = body.service_type_names[i]
         rs = RequestService(
-            request_id=req.id,
+            request_id=new_request.id,
             service_id=sid,
             service_type_name=sname,
         )
         db.add(rs)
     db.commit()
 
-    # إسناد تلقائي للفني الأعلى تقييماً (ثم الأقرب) لخدمة الطلب الأولى
-    first_service_id = body.service_ids[0] if body.service_ids else None
-    if first_service_id is not None:
-        chosen = _choose_technician_for_request(db, first_service_id, body.lat, body.lng)
-        if chosen is not None:
-            req.assigned_technician_id = chosen.id
-            req.status = "assigned"
-        else:
-            req.status = "pending"
+    service_id = body.service_ids[0] if body.service_ids else None
+    best_tech = (
+        find_best_technician(db, service_id, body.lat, body.lng, excluded_ids=[])
+        if service_id is not None
+        else None
+    )
+
+    if best_tech:
+        timeout_at = datetime.utcnow() + timedelta(minutes=5)
+        assignment = RequestAssignment(
+            request_id=new_request.id,
+            technician_id=best_tech.id,
+            status="pending",
+            timeout_at=timeout_at,
+        )
+        db.add(assignment)
+        new_request.assigned_technician_id = best_tech.id
+        new_request.status = "assigned"
+        db.commit()
+        db.refresh(assignment)
+
+        from app.services.firebase_service import notify_user
+
+        notify_user(
+            db=db,
+            user_id=best_tech.id,
+            user_type="technician",
+            title="طلب خدمة جديد",
+            body="لديك طلب خدمة جديد، يرجى الرد خلال 5 دقائق",
+            type="new_request",
+            data={"request_id": str(new_request.id)},
+        )
+
+        schedule_assignment_timeout(new_request.id, assignment.id, SessionLocal)
     else:
-        req.status = "pending"
-    db.commit()
-    db.refresh(req)
-    return _serialize_request(db, req)
+        new_request.status = "pending"
+        db.commit()
+
+    db.refresh(new_request)
+    return _serialize_request(db, new_request)
 
 
 @router.post("/{request_id}/accept", response_model=RequestResponse)
@@ -155,19 +142,61 @@ def accept_request(
     db: Session = Depends(get_db),
     technician_id: int = Depends(require_technician),
 ):
-    req = db.query(Request).filter(Request.id == request_id).first()
-    if not req:
+    request = db.query(Request).filter(Request.id == request_id).first()
+    if not request:
         raise HTTPException(status_code=404, detail="الطلب غير موجود")
 
-    if req.assigned_technician_id is None:
-        req.assigned_technician_id = technician_id
-    elif req.assigned_technician_id != technician_id:
+    current_tech = db.query(Technician).filter(Technician.id == technician_id).first()
+    if not current_tech:
+        raise HTTPException(status_code=404, detail="الفني غير موجود")
+
+    if request.assigned_technician_id is None:
+        request.assigned_technician_id = technician_id
+    elif request.assigned_technician_id != technician_id:
         raise HTTPException(status_code=403, detail="هذا الطلب غير مسند لك")
 
-    req.status = "accepted"
+    request.status = "accepted"
+
+    assignment = (
+        db.query(RequestAssignment)
+        .filter(
+            RequestAssignment.request_id == request_id,
+            RequestAssignment.technician_id == current_tech.id,
+            RequestAssignment.status == "pending",
+        )
+        .first()
+    )
+    if assignment:
+        assignment.status = "accepted"
+
+    current_tech.availability_status = "busy"
+
+    total = db.query(RequestAssignment).filter(RequestAssignment.technician_id == current_tech.id).count()
+    accepted = (
+        db.query(RequestAssignment)
+        .filter(
+            RequestAssignment.technician_id == current_tech.id,
+            RequestAssignment.status == "accepted",
+        )
+        .count()
+    )
+    current_tech.acceptance_rate = accepted / total if total > 0 else 0
     db.commit()
-    db.refresh(req)
-    return _serialize_request(db, req)
+
+    from app.services.firebase_service import notify_user
+
+    notify_user(
+        db=db,
+        user_id=request.customer_id,
+        user_type="customer",
+        title="تم قبول طلبك",
+        body="الفني في الطريق إليك",
+        type="request_accepted",
+        data={"request_id": str(request_id)},
+    )
+
+    db.refresh(request)
+    return _serialize_request(db, request)
 
 
 @router.post("/{request_id}/complete", response_model=RequestResponse)
@@ -177,21 +206,57 @@ def complete_request(
     db: Session = Depends(get_db),
     technician_id: int = Depends(require_technician),
 ):
-    req = db.query(Request).filter(Request.id == request_id).first()
-    if not req:
+    request = db.query(Request).filter(Request.id == request_id).first()
+    if not request:
         raise HTTPException(status_code=404, detail="الطلب غير موجود")
-    if req.assigned_technician_id != technician_id:
+    if request.assigned_technician_id != technician_id:
         raise HTTPException(status_code=403, detail="هذا الطلب غير مسند لك")
 
     report = (body or {}).get("report")
     if not report or not str(report).strip():
         raise HTTPException(status_code=400, detail="التقرير مطلوب")
 
-    req.technician_report = str(report).strip()
-    req.status = "completed"
+    request.technician_report = str(report).strip()
+    request.status = "completed"
+
+    current_tech = db.query(Technician).filter(Technician.id == technician_id).first()
+    if current_tech:
+        current_tech.availability_status = "available"
+
+        total_accepted = (
+            db.query(RequestAssignment)
+            .filter(
+                RequestAssignment.technician_id == current_tech.id,
+                RequestAssignment.status == "accepted",
+            )
+            .count()
+        )
+        total_completed = (
+            db.query(Request)
+            .filter(
+                Request.assigned_technician_id == current_tech.id,
+                Request.status == "completed",
+            )
+            .count()
+        )
+        current_tech.completion_rate = total_completed / total_accepted if total_accepted > 0 else 0
+
     db.commit()
-    db.refresh(req)
-    return _serialize_request(db, req)
+
+    from app.services.firebase_service import notify_user
+
+    notify_user(
+        db=db,
+        user_id=request.customer_id,
+        user_type="customer",
+        title="تم إنجاز طلبك",
+        body="قام الفني بإنجاز طلبك، يرجى التقييم",
+        type="request_completed",
+        data={"request_id": str(request_id)},
+    )
+
+    db.refresh(request)
+    return _serialize_request(db, request)
 
 
 @router.post("/{request_id}/rate", response_model=RequestResponse)
@@ -201,16 +266,15 @@ def rate_request(
     db: Session = Depends(get_db),
     customer_id: int = Depends(require_customer),
 ):
-    req = db.query(Request).filter(Request.id == request_id).first()
-    if not req:
+    request = db.query(Request).filter(Request.id == request_id).first()
+    if not request:
         raise HTTPException(status_code=404, detail="الطلب غير موجود")
-    if req.customer_id != customer_id:
+    if request.customer_id != customer_id:
         raise HTTPException(status_code=403, detail="غير مصرح")
-    if req.status != "completed":
+    if request.status != "completed":
         raise HTTPException(status_code=400, detail="لا يمكن التقييم قبل إنجاز الطلب")
-    if req.customer_rating is not None:
-        # لا نسمح بإعادة التقييم لنفس الطلب في النسخة الحالية
-        return _serialize_request(db, req)
+    if request.customer_rating is not None:
+        return _serialize_request(db, request)
 
     rating = (body or {}).get("rating")
     try:
@@ -220,19 +284,40 @@ def rate_request(
     if rating_value < 1 or rating_value > 5:
         raise HTTPException(status_code=400, detail="التقييم يجب أن يكون بين 1 و 5")
 
-    req.customer_rating = rating_value
+    request.customer_rating = rating_value
 
-    # نضيفه أيضاً لجدول ratings لحساب متوسط تقييم الفني
-    if req.assigned_technician_id is not None:
+    tech = None
+    if request.assigned_technician_id is not None:
         db.add(
             Rating(
                 customer_id=customer_id,
-                technician_id=req.assigned_technician_id,
+                technician_id=request.assigned_technician_id,
                 score=rating_value,
                 comment=None,
             )
         )
 
+        tech = db.query(Technician).filter(Technician.id == request.assigned_technician_id).first()
+        if tech:
+            current_total = tech.total_ratings or 0
+            current_avg = tech.avg_rating or 0.0
+            tech.avg_rating = ((current_avg * current_total) + rating_value) / (current_total + 1)
+            tech.total_ratings = current_total + 1
+
     db.commit()
-    db.refresh(req)
-    return _serialize_request(db, req)
+
+    if tech:
+        from app.services.firebase_service import notify_user
+
+        notify_user(
+            db=db,
+            user_id=tech.id,
+            user_type="technician",
+            title="تقييم جديد",
+            body=f"حصلت على تقييم {rating_value} من 5",
+            type="request_rated",
+            data={"request_id": str(request_id)},
+        )
+
+    db.refresh(request)
+    return _serialize_request(db, request)

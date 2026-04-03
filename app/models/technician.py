@@ -24,10 +24,18 @@ class Technician(Base):
     phone = Column(String(20), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     status = Column(String(20), default="available")  # available, busy, offline
+    fcm_token = Column(String(255), nullable=True)
+    availability_status = Column(String(20), default="offline")  # available, busy, offline
+    avg_rating = Column(Float, default=0.0)
+    total_ratings = Column(Integer, default=0)
+    acceptance_rate = Column(Float, default=0.0)
+    completion_rate = Column(Float, default=0.0)
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
     # المرتفعات - يمكن أن تكون التخصصات أو التقييم الإجمالي
     specializations = Column(String(255), nullable=True)
+    profile_photo_url = Column(String(500), nullable=True)
+    id_card_photo_url = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     service_links = relationship("TechnicianService", back_populates="technician")

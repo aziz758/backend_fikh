@@ -65,6 +65,10 @@ class Settings:
         )
         self.SMS_API_URL: str = os.getenv("SMS_API_URL", "")
         self.SMS_API_KEY: str = os.getenv("SMS_API_KEY", "")
+        self.FIREBASE_CREDENTIALS_PATH: str = os.getenv(
+            "FIREBASE_CREDENTIALS_PATH",
+            "firebase_credentials.json",
+        )
 
 
 settings = Settings()

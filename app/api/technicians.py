@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.database import get_db
 from app.models import Technician, TechnicianService, Rating
@@ -40,7 +40,8 @@ def get_nearby_technicians(
         .outerjoin(subq, subq.c.technician_id == Technician.id)
         .filter(
             TechnicianService.service_id == service_id,
-            Technician.status == "available",
+            or_(Technician.status == "approved", Technician.status == "available"),
+            or_(Technician.availability_status == "available", Technician.availability_status.is_(None)),
         )
         .all()
     )
@@ -55,6 +56,7 @@ def get_nearby_technicians(
             "name": t.name,
             "phone": t.phone,
             "status": t.status,
+            "availability_status": getattr(t, "availability_status", None),
             "lat": t.lat,
             "lng": t.lng,
             "avg_rating": round(float(avg), 1),
