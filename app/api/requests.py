@@ -1,10 +1,18 @@
-﻿from datetime import datetime, timedelta
+﻿import os
+import shutil
+import uuid
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user_id, require_customer, require_technician
+from app.api.dependencies import (
+    get_current_user,
+    get_current_user_id,
+    require_customer,
+    require_technician,
+)
 from app.database import SessionLocal, get_db
 from app.models import Rating, Request, RequestService, Technician
 from app.models.request_assignment import RequestAssignment
@@ -12,7 +20,22 @@ from app.schemas.request_schema import RequestCreate, RequestResponse
 from app.services.assignment_service import find_best_technician, schedule_assignment_timeout
 
 router = APIRouter(prefix="/requests", tags=["requests"])
+upload_router = APIRouter()
 
+
+@upload_router.post("/request-image/")
+async def upload_request_image(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    os.makedirs("uploads", exist_ok=True)
+    ext = file.filename.split(".")[-1]
+    filename = f"{uuid.uuid4()}.{ext}"
+    filepath = f"uploads/{filename}"
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"image_url": f"/uploads/{filename}", "url": f"/uploads/{filename}"}
 
 def _avg_rating(db: Session, technician_id: int) -> float:
     avg = db.query(func.avg(Rating.score)).filter(Rating.technician_id == technician_id).scalar()
@@ -58,7 +81,7 @@ def list_my_requests(
     elif user_type == "technician":
         q = q.filter(Request.assigned_technician_id == user_id)
     else:
-        raise HTTPException(status_code=403, detail="نوع مستخدم غير مدعوم")
+        raise HTTPException(status_code=403, detail="Unsupported user type")
 
     reqs = q.all()
     return [_serialize_request(db, r) for r in reqs]
@@ -121,8 +144,8 @@ def create_request(
             db=db,
             user_id=best_tech.id,
             user_type="technician",
-            title="طلب خدمة جديد",
-            body="لديك طلب خدمة جديد، يرجى الرد خلال 5 دقائق",
+            title="New service request",
+            body="You have a new service request. Please respond within 5 minutes.",
             type="new_request",
             data={"request_id": str(new_request.id)},
         )
@@ -144,16 +167,16 @@ def accept_request(
 ):
     request = db.query(Request).filter(Request.id == request_id).first()
     if not request:
-        raise HTTPException(status_code=404, detail="الطلب غير موجود")
+        raise HTTPException(status_code=404, detail="Request not found")
 
     current_tech = db.query(Technician).filter(Technician.id == technician_id).first()
     if not current_tech:
-        raise HTTPException(status_code=404, detail="الفني غير موجود")
+        raise HTTPException(status_code=404, detail="Technician not found")
 
     if request.assigned_technician_id is None:
         request.assigned_technician_id = technician_id
     elif request.assigned_technician_id != technician_id:
-        raise HTTPException(status_code=403, detail="هذا الطلب غير مسند لك")
+        raise HTTPException(status_code=403, detail="This request is not assigned to you")
 
     request.status = "accepted"
 
@@ -189,8 +212,8 @@ def accept_request(
         db=db,
         user_id=request.customer_id,
         user_type="customer",
-        title="تم قبول طلبك",
-        body="الفني في الطريق إليك",
+        title="Your request was accepted",
+        body="The technician is on the way",
         type="request_accepted",
         data={"request_id": str(request_id)},
     )
@@ -208,13 +231,13 @@ def complete_request(
 ):
     request = db.query(Request).filter(Request.id == request_id).first()
     if not request:
-        raise HTTPException(status_code=404, detail="الطلب غير موجود")
+        raise HTTPException(status_code=404, detail="Request not found")
     if request.assigned_technician_id != technician_id:
-        raise HTTPException(status_code=403, detail="هذا الطلب غير مسند لك")
+        raise HTTPException(status_code=403, detail="This request is not assigned to you")
 
     report = (body or {}).get("report")
     if not report or not str(report).strip():
-        raise HTTPException(status_code=400, detail="التقرير مطلوب")
+        raise HTTPException(status_code=400, detail="Report is required")
 
     request.technician_report = str(report).strip()
     request.status = "completed"
@@ -249,8 +272,8 @@ def complete_request(
         db=db,
         user_id=request.customer_id,
         user_type="customer",
-        title="تم إنجاز طلبك",
-        body="قام الفني بإنجاز طلبك، يرجى التقييم",
+        title="Your request is completed",
+        body="The technician completed your request. Please rate the service.",
         type="request_completed",
         data={"request_id": str(request_id)},
     )
@@ -268,11 +291,11 @@ def rate_request(
 ):
     request = db.query(Request).filter(Request.id == request_id).first()
     if not request:
-        raise HTTPException(status_code=404, detail="الطلب غير موجود")
+        raise HTTPException(status_code=404, detail="Request not found")
     if request.customer_id != customer_id:
-        raise HTTPException(status_code=403, detail="غير مصرح")
+        raise HTTPException(status_code=403, detail="Unauthorized")
     if request.status != "completed":
-        raise HTTPException(status_code=400, detail="لا يمكن التقييم قبل إنجاز الطلب")
+        raise HTTPException(status_code=400, detail="You can only rate completed requests")
     if request.customer_rating is not None:
         return _serialize_request(db, request)
 
@@ -280,9 +303,9 @@ def rate_request(
     try:
         rating_value = float(rating)
     except Exception:
-        raise HTTPException(status_code=400, detail="قيمة التقييم غير صحيحة")
+        raise HTTPException(status_code=400, detail="Invalid rating value")
     if rating_value < 1 or rating_value > 5:
-        raise HTTPException(status_code=400, detail="التقييم يجب أن يكون بين 1 و 5")
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
 
     request.customer_rating = rating_value
 
@@ -313,11 +336,13 @@ def rate_request(
             db=db,
             user_id=tech.id,
             user_type="technician",
-            title="تقييم جديد",
-            body=f"حصلت على تقييم {rating_value} من 5",
+            title="New rating",
+            body=f"You received a rating of {rating_value} out of 5",
             type="request_rated",
             data={"request_id": str(request_id)},
         )
 
     db.refresh(request)
     return _serialize_request(db, request)
+
+

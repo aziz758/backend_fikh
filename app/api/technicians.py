@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+﻿from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
@@ -9,8 +9,9 @@ router = APIRouter(prefix="/technicians", tags=["technicians"])
 
 
 def haversine_distance(lat1, lng1, lat2, lng2):
-    """المسافة بالكيلومتر تقريباً"""
+    """Approximate distance in kilometers."""
     import math
+
     R = 6371
     lat1, lng1, lat2, lng2 = map(math.radians, [lat1, lng1, lat2, lng2])
     dlat = lat2 - lat1
@@ -28,7 +29,7 @@ def get_nearby_technicians(
     limit: int = Query(10, le=50),
     db: Session = Depends(get_db),
 ):
-    """جلب أقرب الفنيين وأعلى تقييماً للخدمة المحددة"""
+    """Get nearby technicians with highest ratings for the selected service."""
     subq = (
         db.query(Rating.technician_id, func.avg(Rating.score).label("avg_rating"))
         .group_by(Rating.technician_id)
@@ -51,16 +52,18 @@ def get_nearby_technicians(
             continue
         dist = haversine_distance(customer_lat, customer_lng, t.lat, t.lng)
         avg = db.query(func.avg(Rating.score)).filter(Rating.technician_id == t.id).scalar() or 0
-        result.append({
-            "id": t.id,
-            "name": t.name,
-            "phone": t.phone,
-            "status": t.status,
-            "availability_status": getattr(t, "availability_status", None),
-            "lat": t.lat,
-            "lng": t.lng,
-            "avg_rating": round(float(avg), 1),
-            "distance_km": round(dist, 2),
-        })
+        result.append(
+            {
+                "id": t.id,
+                "name": t.name,
+                "phone": t.phone,
+                "status": t.status,
+                "availability_status": getattr(t, "availability_status", None),
+                "lat": t.lat,
+                "lng": t.lng,
+                "avg_rating": round(float(avg), 1),
+                "distance_km": round(dist, 2),
+            }
+        )
     result.sort(key=lambda x: (-x["avg_rating"], x["distance_km"]))
     return result[:limit]

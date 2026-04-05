@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import math
 import threading
@@ -101,6 +101,7 @@ def schedule_assignment_timeout(request_id: int, assignment_id: int, db_factory)
         loop = asyncio.get_running_loop()
         loop.create_task(check_assignment_timeout(request_id, assignment_id, db_factory))
     except RuntimeError:
+
         def _runner():
             asyncio.run(check_assignment_timeout(request_id, assignment_id, db_factory))
 
@@ -153,8 +154,8 @@ async def check_assignment_timeout(request_id: int, assignment_id: int, db_facto
                 db=db,
                 user_id=next_tech.id,
                 user_type="technician",
-                title="طلب خدمة جديد",
-                body="لديك طلب خدمة جديد، يرجى الرد خلال 5 دقائق",
+                title="New service request",
+                body="You have a new service request. Please respond within 5 minutes.",
                 type="new_request",
                 data={"request_id": str(request_id)},
             )
@@ -170,8 +171,8 @@ async def check_assignment_timeout(request_id: int, assignment_id: int, db_facto
                 db=db,
                 user_id=request.customer_id,
                 user_type="customer",
-                title="لا يوجد فنيين متاحين",
-                body="عذراً، لا يوجد فنيين متاحين حالياً. يرجى المحاولة لاحقاً",
+                title="No technicians available",
+                body="Sorry, no technicians are currently available. Please try again later.",
                 type="no_technicians",
                 data={"request_id": str(request_id)},
             )

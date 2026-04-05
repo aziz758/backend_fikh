@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+﻿from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -6,7 +6,8 @@ from app.database import Base
 
 
 class TechnicianService(Base):
-    """جدول ربط: يحدد - خدمة يقدمها الفني"""
+    """Link table: maps a technician to services they provide."""
+
     __tablename__ = "technician_services"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -32,7 +33,7 @@ class Technician(Base):
     completion_rate = Column(Float, default=0.0)
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
-    # المرتفعات - يمكن أن تكون التخصصات أو التقييم الإجمالي
+    # Optional profile metadata (specializations or aggregate rating context).
     specializations = Column(String(255), nullable=True)
     profile_photo_url = Column(String(500), nullable=True)
     id_card_photo_url = Column(String(500), nullable=True)

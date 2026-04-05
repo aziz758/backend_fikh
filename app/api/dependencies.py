@@ -13,10 +13,10 @@ def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     if not credentials or not credentials.credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token مطلوب")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is required")
     payload = decode_token(credentials.credentials)
     if not payload:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token غير صالح")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return payload.get("user_id"), payload.get("user_type")
 
 
@@ -48,12 +48,12 @@ def get_current_user(
 def require_customer(creds=Depends(get_current_user_id)):
     user_id, user_type = creds
     if user_type != "customer":
-        raise HTTPException(status_code=403, detail="يتطلب حساب عميل")
+        raise HTTPException(status_code=403, detail="Customer account required")
     return user_id
 
 
 def require_technician(creds=Depends(get_current_user_id)):
     user_id, user_type = creds
     if user_type != "technician":
-        raise HTTPException(status_code=403, detail="يتطلب حساب فني")
+        raise HTTPException(status_code=403, detail="Technician account required")
     return user_id

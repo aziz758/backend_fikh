@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+﻿from pydantic import BaseModel, Field
 
 
 class PhoneRequest(BaseModel):
@@ -29,7 +29,7 @@ class ResetPasswordRequest(BaseModel):
     phone: str = Field(..., min_length=10, max_length=20)
     code: str = Field(..., min_length=4, max_length=6)
     new_password: str = Field(..., min_length=6)
-    # اختياري لتوافق أفضل مع الفرونت الحالي (الذي لا يرسل user_type)
+    # Optional for better compatibility with the current frontend (which does not send user_type).
     user_type: str | None = Field(default=None, pattern="^(customer|technician)$")
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, literal, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -223,8 +223,8 @@ def update_technician_status(
             db=db,
             user_id=technician.id,
             user_type="technician",
-            title="تم قبول حسابك ✅",
-            body="يمكنك الآن استقبال الطلبات",
+            title="Your account has been approved",
+            body="You can now receive requests",
             type="account_approved",
         )
     elif new_status == "rejected":
@@ -232,8 +232,8 @@ def update_technician_status(
             db=db,
             user_id=technician.id,
             user_type="technician",
-            title="لم يتم قبول حسابك ❌",
-            body="يرجى التواصل مع الدعم لمعرفة السبب",
+            title="Your account was not approved",
+            body="Please contact support to know the reason",
             type="account_rejected",
         )
 
@@ -564,3 +564,5 @@ def get_admin_dashboard(
         "pending_technicians": pending_technicians,
         "recent_ratings": recent_ratings,
     }
+
+

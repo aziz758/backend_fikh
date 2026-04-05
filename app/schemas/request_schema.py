@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+﻿from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
@@ -21,7 +21,7 @@ class RequestResponse(BaseModel):
     status: str
     created_at: Optional[datetime] = None
 
-    # مشتقات لخدمة الفرونت
+    # Extra fields for frontend convenience.
     service_ids: List[int] = []
     service_type_names: List[str] = []
     lat: Optional[float] = None

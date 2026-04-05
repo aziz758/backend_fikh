@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta
 import random
 import string
 from jose import JWTError, jwt
@@ -67,7 +67,7 @@ def verify_otp(db: Session, phone: str, code: str, user_type: str) -> bool:
     )
     if otp is None:
         return False
-    # استهلاك/إبطال الرمز بعد نجاح التحقق لمنع إعادة استخدامه
+    # Consume/invalidate OTP after successful verification to prevent reuse.
     db.delete(otp)
     db.commit()
     return True

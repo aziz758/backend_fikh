@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -36,16 +36,16 @@ async def send_otp(body: PhoneRequest, db: Session = Depends(get_db)):
     try:
         sent = await send_otp_sms(body.phone, code)
         if not sent:
-            raise HTTPException(status_code=500, detail="فشل إرسال رمز التحقق، حاول مجدداً")
+            raise HTTPException(status_code=500, detail="Failed to send verification code. Please try again.")
     except HTTPException:
-        raise HTTPException(status_code=500, detail="فشل إرسال رمز التحقق، حاول مجدداً")
-    return {"message": "تم إرسال رمز التحقق"}
+        raise HTTPException(status_code=500, detail="Failed to send verification code. Please try again.")
+    return {"message": "Verification code sent"}
 
 
 @router.post("/verify-otp")
 def verify_otp_endpoint(body: OtpVerify, db: Session = Depends(get_db)):
     if not verify_otp(db, body.phone, body.code, body.user_type):
-        raise HTTPException(status_code=400, detail="رمز غير صحيح أو منتهي")
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
     user = get_user_by_phone(db, body.phone, body.user_type)
     if not user:
         return {"verified": True, "registered": False, "phone": body.phone}
@@ -65,9 +65,9 @@ def verify_otp_endpoint(body: OtpVerify, db: Session = Depends(get_db)):
 @router.post("/register/customer")
 def register_customer(body: CustomerCreate, db: Session = Depends(get_db)):
     if db.query(Customer).filter(Customer.phone == body.phone).first():
-        raise HTTPException(status_code=400, detail="هذا الرقم مسجل مسبقاً")
+        raise HTTPException(status_code=400, detail="This phone number is already registered")
     if db.query(Technician).filter(Technician.phone == body.phone).first():
-        raise HTTPException(status_code=400, detail="هذا الرقم مسجل مسبقاً")
+        raise HTTPException(status_code=400, detail="This phone number is already registered")
     customer = Customer(
         name=body.name,
         phone=body.phone,
@@ -89,9 +89,9 @@ def register_customer(body: CustomerCreate, db: Session = Depends(get_db)):
 @router.post("/register/technician")
 def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
     if db.query(Technician).filter(Technician.phone == body.phone).first():
-        raise HTTPException(status_code=400, detail="هذا الرقم مسجل مسبقاً")
+        raise HTTPException(status_code=400, detail="This phone number is already registered")
     if db.query(Customer).filter(Customer.phone == body.phone).first():
-        raise HTTPException(status_code=400, detail="هذا الرقم مسجل مسبقاً")
+        raise HTTPException(status_code=400, detail="This phone number is already registered")
     tech = Technician(
         name=body.name,
         phone=body.phone,
@@ -119,9 +119,9 @@ def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = get_user_by_phone(db, body.phone, body.user_type)
     if not user:
-        raise HTTPException(status_code=401, detail="رقم الهاتف أو كلمة المرور غير صحيحة")
+        raise HTTPException(status_code=401, detail="Phone number or password is incorrect")
     if not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="رقم الهاتف أو كلمة المرور غير صحيحة")
+        raise HTTPException(status_code=401, detail="Phone number or password is incorrect")
     token = create_access_token(
         {"user_id": user.id, "user_type": body.user_type, "sub": body.phone}
     )
@@ -134,7 +134,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/reset-password")
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
-    # الفرونت الحالي لا يرسل user_type هنا، فنحاول التحقق على النوعين
+    # The current frontend does not send user_type here, so we try both types.
     if body.user_type:
         types = [body.user_type]
     else:
@@ -149,15 +149,15 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
             break
 
     if not verified or not verified_type:
-        raise HTTPException(status_code=400, detail="رمز غير صحيح أو منتهي")
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
 
     user = get_user_by_phone(db, body.phone, verified_type)
     if not user:
-        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
+        raise HTTPException(status_code=404, detail="User not found")
 
     user.password_hash = hash_password(body.new_password)
     db.commit()
-    return {"message": "تم تغيير كلمة المرور بنجاح"}
+    return {"message": "Password changed successfully"}
 
 
 @router.post("/change-password")
@@ -174,14 +174,15 @@ def change_password(
         user = db.query(Technician).filter(Technician.id == user_id).first()
 
     if not user:
-        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
+        raise HTTPException(status_code=404, detail="User not found")
 
     if not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="كلمة المرور الحالية غير صحيحة")
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     user.password_hash = hash_password(body.new_password)
     db.commit()
-    return {"message": "تم تغيير كلمة المرور بنجاح"}
+    return {"message": "Password changed successfully"}
+
 
 @router.post("/update-fcm-token")
 def update_fcm_token(

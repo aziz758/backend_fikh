@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil
 import uuid
 
@@ -88,8 +88,8 @@ def update_technician_status(
             db,
             tech.id,
             "technician",
-            "تم قبول حسابك",
-            "يمكنك الآن استقبال الطلبات",
+            "Your account has been approved",
+            "You can now receive requests",
             "account_approved",
         )
         tech.availability_status = "available"
@@ -99,8 +99,8 @@ def update_technician_status(
             db,
             tech.id,
             "technician",
-            "لم يتم قبول حسابك",
-            "يرجى التواصل مع الدعم",
+            "Your account was not approved",
+            "Please contact support",
             "account_rejected",
         )
 
