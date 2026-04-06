@@ -28,6 +28,7 @@ app.include_router(upload_router, prefix="/api/uploads", tags=["Uploads"])
 app.include_router(technicians.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(technician_profile.router, prefix="/api/technician/profile", tags=["Technician Profile"])
+app.include_router(technician_profile.profile_alias_router, prefix="/api", tags=["Profile"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 
 

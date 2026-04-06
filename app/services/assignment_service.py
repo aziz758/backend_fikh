@@ -1,6 +1,5 @@
 ﻿import asyncio
 import logging
-import math
 import threading
 from datetime import datetime, timedelta
 
@@ -10,21 +9,23 @@ from sqlalchemy.orm import Session
 from app.models.request import Request
 from app.models.request_assignment import RequestAssignment
 from app.models.technician import Technician, TechnicianService
+from app.services.request_state_machine import (
+    InvalidRequestStatusTransition,
+    apply_request_status_transition,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def haversine(lat1, lng1, lat2, lng2) -> float:
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
 def _recalc_acceptance_rate(db: Session, technician_id: int) -> None:
-    total = db.query(RequestAssignment).filter(RequestAssignment.technician_id == technician_id).count()
+    total = (
+        db.query(RequestAssignment)
+        .filter(
+            RequestAssignment.technician_id == technician_id,
+            RequestAssignment.status != "cancelled",
+        )
+        .count()
+    )
     accepted = (
         db.query(RequestAssignment)
         .filter(
@@ -45,7 +46,7 @@ def find_best_technician(
     customer_lng: float | None,
     excluded_ids: list | None = None,
 ):
-    """Find nearest + highest rated available technician for a service."""
+    """Pick an approved + available technician that provides the requested service."""
     excluded_ids = excluded_ids or []
 
     query = (
@@ -53,42 +54,15 @@ def find_best_technician(
         .join(TechnicianService, Technician.id == TechnicianService.technician_id)
         .filter(
             TechnicianService.service_id == service_id,
-            or_(Technician.status == "approved", Technician.status == "available"),
+            Technician.status == "approved",
             or_(Technician.availability_status == "available", Technician.availability_status.is_(None)),
         )
     )
-    if customer_lat is not None and customer_lng is not None:
-        query = query.filter(Technician.lat.isnot(None), Technician.lng.isnot(None))
     if excluded_ids:
         query = query.filter(Technician.id.notin_(excluded_ids))
-    technicians = query.all()
 
-    if not technicians:
-        return None
-
-    best = None
-    best_score = -1
-    for tech in technicians:
-        distance_score = 0.0
-        if (
-            customer_lat is not None
-            and customer_lng is not None
-            and tech.lat is not None
-            and tech.lng is not None
-        ):
-            distance = haversine(customer_lat, customer_lng, tech.lat, tech.lng)
-            distance_score = (1 / (distance + 0.1)) * 0.4
-        score = (
-            distance_score
-            + ((tech.avg_rating or 0) / 5) * 0.4
-            + (tech.acceptance_rate or 0) * 0.1
-            + (tech.completion_rate or 0) * 0.1
-        )
-        if score > best_score:
-            best_score = score
-            best = tech
-
-    return best
+    # Selection is based on service match + availability only (no distance/rating score).
+    return query.order_by(Technician.id.asc()).first()
 
 
 def schedule_assignment_timeout(request_id: int, assignment_id: int, db_factory) -> None:
@@ -145,7 +119,16 @@ async def check_assignment_timeout(request_id: int, assignment_id: int, db_facto
             )
             db.add(new_assignment)
             request.assigned_technician_id = next_tech.id
-            request.status = "assigned"
+            try:
+                apply_request_status_transition(
+                    request,
+                    "assigned",
+                    allow_same_status=True,
+                    note="Automatic reassignment after technician timeout",
+                )
+            except InvalidRequestStatusTransition as e:
+                logger.error(f"Timeout reassignment transition error: {e}")
+                return
             db.commit()
 
             from app.services.firebase_service import notify_user
@@ -162,7 +145,15 @@ async def check_assignment_timeout(request_id: int, assignment_id: int, db_facto
 
             schedule_assignment_timeout(request_id, new_assignment.id, db_factory)
         else:
-            request.status = "cancelled"
+            try:
+                apply_request_status_transition(
+                    request,
+                    "cancelled",
+                    note="No available technicians after timeout cycle",
+                )
+            except InvalidRequestStatusTransition as e:
+                logger.error(f"Timeout cancellation transition error: {e}")
+                return
             db.commit()
 
             from app.services.firebase_service import notify_user

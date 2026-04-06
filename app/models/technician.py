@@ -24,7 +24,7 @@ class Technician(Base):
     name = Column(String(100), nullable=False)
     phone = Column(String(20), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    status = Column(String(20), default="available")  # available, busy, offline
+    status = Column(String(20), default="pending_documents")  # pending_documents, pending_approval, approved, rejected
     fcm_token = Column(String(255), nullable=True)
     availability_status = Column(String(20), default="offline")  # available, busy, offline
     avg_rating = Column(Float, default=0.0)

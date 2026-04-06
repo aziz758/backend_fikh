@@ -96,7 +96,8 @@ def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
         name=body.name,
         phone=body.phone,
         password_hash=hash_password(body.password),
-        availability_status="available",
+        status="pending_documents",
+        availability_status="offline",
     )
     db.add(tech)
     db.commit()

@@ -41,16 +41,18 @@ def get_nearby_technicians(
         .outerjoin(subq, subq.c.technician_id == Technician.id)
         .filter(
             TechnicianService.service_id == service_id,
-            or_(Technician.status == "approved", Technician.status == "available"),
+            Technician.status == "approved",
             or_(Technician.availability_status == "available", Technician.availability_status.is_(None)),
         )
         .all()
     )
     result = []
     for t in techs:
-        if t.lat is None or t.lng is None:
-            continue
-        dist = haversine_distance(customer_lat, customer_lng, t.lat, t.lng)
+        dist = (
+            haversine_distance(customer_lat, customer_lng, t.lat, t.lng)
+            if t.lat is not None and t.lng is not None
+            else None
+        )
         avg = db.query(func.avg(Rating.score)).filter(Rating.technician_id == t.id).scalar() or 0
         result.append(
             {
@@ -62,8 +64,14 @@ def get_nearby_technicians(
                 "lat": t.lat,
                 "lng": t.lng,
                 "avg_rating": round(float(avg), 1),
-                "distance_km": round(dist, 2),
+                "distance_km": round(dist, 2) if dist is not None else None,
             }
         )
-    result.sort(key=lambda x: (-x["avg_rating"], x["distance_km"]))
+    result.sort(
+        key=lambda x: (
+            -x["avg_rating"],
+            x["distance_km"] is None,
+            x["distance_km"] if x["distance_km"] is not None else 10**9,
+        )
+    )
     return result[:limit]

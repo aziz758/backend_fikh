@@ -24,6 +24,7 @@ class RequestResponse(BaseModel):
     # Extra fields for frontend convenience.
     service_ids: List[int] = []
     service_type_names: List[str] = []
+    service_id: Optional[int] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     address: Optional[str] = None
@@ -31,8 +32,13 @@ class RequestResponse(BaseModel):
     assigned_technician_id: Optional[int] = None
     assigned_technician_name: Optional[str] = None
     assigned_technician_rating: Optional[float] = None
+    assigned_technician_avatar: Optional[str] = None
     technician_report: Optional[str] = None
     customer_rating: Optional[float] = None
+    rating_comment: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

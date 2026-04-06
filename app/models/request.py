@@ -25,6 +25,10 @@ class Request(Base):
 
     # Customer rating for this request (MVP). Can later move to a dedicated request-linked rating table.
     customer_rating = Column(Float, nullable=True)
+    rating_comment = Column(Text, nullable=True)
+    assigned_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     customer = relationship("Customer", back_populates="requests")
