@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -18,7 +17,17 @@ from app.api.dependencies import (
 from app.database import SessionLocal, get_db
 from app.models import Rating, Request as RequestModel, RequestService, Service, Technician
 from app.models.request_assignment import RequestAssignment
-from app.schemas.request_schema import RequestCreate, RequestResponse
+from app.schemas.request_schema import (
+    RequestCancel,
+    RequestCancelWrapped,
+    RequestComplete,
+    RequestCompleteWrapped,
+    RequestCreate,
+    RequestCreateWrapped,
+    RequestRate,
+    RequestRateWrapped,
+    RequestResponse,
+)
 from app.services.assignment_service import find_best_technician, schedule_assignment_timeout
 from app.services.request_state_machine import (
     InvalidRequestStatusTransition,
@@ -80,12 +89,6 @@ def _update_technician_acceptance_rate(db: Session, technician_id: int) -> None:
     tech = db.query(Technician).filter(Technician.id == technician_id).first()
     if tech:
         tech.acceptance_rate = accepted / total if total > 0 else 0
-
-
-def _unwrap_request_payload(payload: dict | None) -> tuple[dict, bool]:
-    if isinstance(payload, dict) and isinstance(payload.get("request"), dict):
-        return payload["request"], True
-    return payload or {}, False
 
 
 def _maybe_wrap_response(payload, wrapped: bool):
@@ -169,18 +172,13 @@ def list_my_requests(
 
 @router.post("/", response_model=RequestResponse)
 def create_request(
-    body: RequestCreate | dict,
+    body: RequestCreate | RequestCreateWrapped,
     db: Session = Depends(get_db),
     customer_id: int = Depends(require_customer),
     wrapped: int = Query(default=0),
 ):
-    raw_payload = body if isinstance(body, dict) else body.model_dump()
-    payload, wrapped_body = _unwrap_request_payload(raw_payload)
-
-    try:
-        request_data = RequestCreate.model_validate(payload)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
+    wrapped_body = isinstance(body, RequestCreateWrapped)
+    request_data = body.request if wrapped_body else body
 
     new_request = RequestModel(
         customer_id=customer_id,
@@ -431,7 +429,7 @@ def reject_request(
 @router.post("/{request_id}/cancel/", response_model=RequestResponse, include_in_schema=False)
 def cancel_request(
     request_id: int,
-    body: dict | None = None,
+    body: RequestCancel | RequestCancelWrapped | None = None,
     db: Session = Depends(get_db),
     customer_id: int = Depends(require_customer),
     wrapped: int = Query(default=0),
@@ -442,8 +440,9 @@ def cancel_request(
     if request.customer_id != customer_id:
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    payload, wrapped_body = _unwrap_request_payload(body or {})
-    cancel_reason = str(payload.get("reason") or "").strip()
+    wrapped_body = isinstance(body, RequestCancelWrapped)
+    cancel_data = body.request if wrapped_body else body
+    cancel_reason = str(cancel_data.reason).strip() if cancel_data and cancel_data.reason else ""
     assigned_tech_id = request.assigned_technician_id
 
     try:
@@ -506,7 +505,7 @@ def cancel_request(
 @router.post("/{request_id}/complete/", response_model=RequestResponse, include_in_schema=False)
 def complete_request(
     request_id: int,
-    body: dict,
+    body: RequestComplete | RequestCompleteWrapped,
     db: Session = Depends(get_db),
     technician_id: int = Depends(require_technician),
     wrapped: int = Query(default=0),
@@ -521,12 +520,9 @@ def complete_request(
     except InvalidRequestStatusTransition as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    payload, wrapped_body = _unwrap_request_payload(body or {})
-    report = payload.get("report")
-    if not report or not str(report).strip():
-        raise HTTPException(status_code=400, detail="Report is required")
-
-    request.technician_report = str(report).strip()
+    wrapped_body = isinstance(body, RequestCompleteWrapped)
+    complete_data = body.request if wrapped_body else body
+    request.technician_report = complete_data.report.strip()
 
     current_tech = db.query(Technician).filter(Technician.id == technician_id).first()
     if current_tech:
@@ -573,7 +569,7 @@ def complete_request(
 @router.post("/{request_id}/rate/", response_model=RequestResponse, include_in_schema=False)
 def rate_request(
     request_id: int,
-    body: dict,
+    body: RequestRate | RequestRateWrapped,
     db: Session = Depends(get_db),
     customer_id: int = Depends(require_customer),
     wrapped: int = Query(default=0),
@@ -586,21 +582,15 @@ def rate_request(
     if request.status != "completed":
         raise HTTPException(status_code=400, detail="You can only rate completed requests")
 
-    payload, wrapped_body = _unwrap_request_payload(body or {})
+    wrapped_body = isinstance(body, RequestRateWrapped)
+    rate_data = body.request if wrapped_body else body
 
     if request.customer_rating is not None:
         response = build_request_response(request, db)
         return _maybe_wrap_response(response, wrapped == 1 or wrapped_body)
 
-    rating = payload.get("rating")
-    try:
-        rating_value = float(rating)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid rating value")
-    if rating_value < 1 or rating_value > 5:
-        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-
-    comment = payload.get("comment")
+    rating_value = float(rate_data.rating)
+    comment = rate_data.comment
 
     request.customer_rating = rating_value
     request.rating_comment = str(comment).strip() if comment is not None and str(comment).strip() else None

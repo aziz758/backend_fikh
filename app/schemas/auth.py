@@ -36,3 +36,7 @@ class ResetPasswordRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=6)
     new_password: str = Field(..., min_length=6)
+
+
+class FcmTokenUpdateRequest(BaseModel):
+    fcm_token: str = Field(..., min_length=10)

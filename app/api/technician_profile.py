@@ -8,6 +8,13 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user
 from app.database import get_db
 from app.models.technician import Technician
+from app.schemas.admin import TechnicianStatusUpdateWithIdRequest
+from app.schemas.common import SuccessResponse
+from app.schemas.technician_profile import (
+    TechnicianDocumentsUploadResponse,
+    TechnicianProfileResponse,
+    TechnicianProfileStatusResponse,
+)
 
 router = APIRouter()
 profile_alias_router = APIRouter(prefix="/profile")
@@ -25,41 +32,44 @@ def _get_current_technician(current_user, db: Session) -> Technician:
     return tech
 
 
-def _serialize_technician_profile(tech: Technician) -> dict:
-    return {
-        "id": tech.id,
-        "name": tech.name,
-        "phone": tech.phone,
-        "status": tech.status,
-        "availability_status": tech.availability_status,
-        "lat": tech.lat,
-        "lng": tech.lng,
-        "avg_rating": float(tech.avg_rating or 0.0),
-        "total_ratings": int(tech.total_ratings or 0),
-        "acceptance_rate": float(tech.acceptance_rate or 0.0),
-        "completion_rate": float(tech.completion_rate or 0.0),
-        "profile_photo_url": tech.profile_photo_url,
-        "id_card_photo_url": tech.id_card_photo_url,
-    }
+def _serialize_technician_profile(tech: Technician) -> TechnicianProfileResponse:
+    return TechnicianProfileResponse(
+        id=tech.id,
+        name=tech.name,
+        phone=tech.phone,
+        status=tech.status,
+        availability_status=tech.availability_status,
+        lat=tech.lat,
+        lng=tech.lng,
+        avg_rating=float(tech.avg_rating or 0.0),
+        total_ratings=int(tech.total_ratings or 0),
+        acceptance_rate=float(tech.acceptance_rate or 0.0),
+        completion_rate=float(tech.completion_rate or 0.0),
+        profile_photo_url=tech.profile_photo_url,
+        id_card_photo_url=tech.id_card_photo_url,
+    )
 
 
 @router.get("")
 @router.get("/", include_in_schema=False)
 @router.get("/me")
 @router.get("/me/", include_in_schema=False)
-def get_my_profile(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+def get_my_profile(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TechnicianProfileResponse:
     tech = _get_current_technician(current_user, db)
     return _serialize_technician_profile(tech)
 
 
-@router.get("/status")
+@router.get("/status", response_model=TechnicianProfileStatusResponse)
 def get_profile_status(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     tech = _get_current_technician(current_user, db)
 
     return {"status": tech.status}
 
 
-@router.post("/documents")
+@router.post("/documents", response_model=TechnicianDocumentsUploadResponse)
 def upload_documents(
     profile_photo: UploadFile = File(...),
     id_card_photo: UploadFile = File(...),
@@ -93,17 +103,17 @@ def upload_documents(
     return {"success": True, "status": "pending_approval"}
 
 
-@router.put("/status")
+@router.put("/status", response_model=SuccessResponse)
 def update_technician_status(
-    body: dict,
+    body: TechnicianStatusUpdateWithIdRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if current_user["type"] != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
 
-    technician_id = body.get("technician_id")
-    new_status = body.get("status")
+    technician_id = body.technician_id
+    new_status = body.status
     if new_status not in ["approved", "rejected", "pending_approval", "pending_documents"]:
         raise HTTPException(status_code=400, detail="Invalid status")
 
@@ -144,6 +154,9 @@ def update_technician_status(
 @profile_alias_router.get("/", include_in_schema=False)
 @profile_alias_router.get("/me")
 @profile_alias_router.get("/me/", include_in_schema=False)
-def get_my_profile_alias(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+def get_my_profile_alias(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TechnicianProfileResponse:
     tech = _get_current_technician(current_user, db)
     return _serialize_technician_profile(tech)

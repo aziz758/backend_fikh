@@ -5,12 +5,17 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.dependencies import get_current_user
 from app.database import get_db
 from app.models import Customer, Request, RequestService, Service, Technician, TechnicianService
+from app.schemas.admin import (
+    BroadcastNotificationRequest,
+    BroadcastNotificationResponse,
+    TechnicianStatusUpdateRequest,
+)
+from app.schemas.common import SuccessResponse
 from app.services.firebase_service import notify_user
 
 router = APIRouter()
 
 VALID_TECHNICIAN_STATUSES = {"approved", "rejected", "pending_approval", "pending_documents"}
-VALID_BROADCAST_TARGETS = {"all", "customers", "technicians", "specific"}
 
 
 def require_admin(current_user=Depends(get_current_user)):
@@ -195,14 +200,14 @@ def list_technicians_for_admin(
     }
 
 
-@router.put("/technicians/{technician_id}/status")
+@router.put("/technicians/{technician_id}/status", response_model=SuccessResponse)
 def update_technician_status(
     technician_id: int,
-    body: dict,
+    body: TechnicianStatusUpdateRequest,
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    new_status = (body or {}).get("status")
+    new_status = body.status
     if new_status not in VALID_TECHNICIAN_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
 
@@ -289,23 +294,19 @@ def list_ratings_for_admin(
     return {"results": results, "total": len(results)}
 
 
-@router.post("/notifications/broadcast")
+@router.post("/notifications/broadcast", response_model=BroadcastNotificationResponse)
 def broadcast_notification(
-    body: dict,
+    body: BroadcastNotificationRequest,
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    payload = body or {}
-    title = str(payload.get("title") or "").strip()
-    message_body = str(payload.get("body") or "").strip()
-    target = str(payload.get("target") or "all").strip().lower()
-    raw_user_ids = payload.get("user_ids") or []
+    title = body.title.strip()
+    message_body = body.body.strip()
+    target = body.target
+    raw_user_ids = body.user_ids
 
     if not title or not message_body:
         raise HTTPException(status_code=400, detail="title and body are required")
-    if target not in VALID_BROADCAST_TARGETS:
-        raise HTTPException(status_code=400, detail="Invalid target value")
-
     sent_count = 0
 
     if target in {"all", "customers"}:
@@ -357,18 +358,7 @@ def broadcast_notification(
                 continue
 
     if target == "specific":
-        if not isinstance(raw_user_ids, list) or not raw_user_ids:
-            raise HTTPException(status_code=400, detail="user_ids is required for specific target")
-
-        user_ids: set[int] = set()
-        for value in raw_user_ids:
-            try:
-                user_ids.add(int(value))
-            except Exception:
-                continue
-
-        if not user_ids:
-            raise HTTPException(status_code=400, detail="No valid user_ids provided")
+        user_ids: set[int] = set(raw_user_ids)
 
         customers = db.query(Customer).filter(Customer.id.in_(user_ids)).all()
         technicians = db.query(Technician).filter(Technician.id.in_(user_ids)).all()

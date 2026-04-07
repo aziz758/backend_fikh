@@ -1,6 +1,7 @@
-﻿from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import datetime
+﻿from datetime import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 
 class RequestCreate(BaseModel):
@@ -13,6 +14,35 @@ class RequestCreate(BaseModel):
     address: Optional[str] = None
 
 
+class RequestCreateWrapped(BaseModel):
+    request: RequestCreate
+
+
+class RequestComplete(BaseModel):
+    report: str = Field(..., min_length=1)
+
+
+class RequestCompleteWrapped(BaseModel):
+    request: RequestComplete
+
+
+class RequestRate(BaseModel):
+    rating: float = Field(..., ge=1, le=5)
+    comment: Optional[str] = None
+
+
+class RequestRateWrapped(BaseModel):
+    request: RequestRate
+
+
+class RequestCancel(BaseModel):
+    reason: Optional[str] = None
+
+
+class RequestCancelWrapped(BaseModel):
+    request: RequestCancel
+
+
 class RequestResponse(BaseModel):
     id: int
     customer_id: int
@@ -22,8 +52,8 @@ class RequestResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     # Extra fields for frontend convenience.
-    service_ids: List[int] = []
-    service_type_names: List[str] = []
+    service_ids: List[int] = Field(default_factory=list)
+    service_type_names: List[str] = Field(default_factory=list)
     service_id: Optional[int] = None
     lat: Optional[float] = None
     lng: Optional[float] = None

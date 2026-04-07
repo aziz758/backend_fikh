@@ -9,7 +9,9 @@ from app.schemas.auth import (
     TokenResponse,
     ResetPasswordRequest,
     ChangePasswordRequest,
+    FcmTokenUpdateRequest,
 )
+from app.schemas.common import MessageResponse, SuccessResponse
 from app.schemas.customer import CustomerCreate
 from app.schemas.technician import TechnicianCreate
 from app.models import Customer, Technician
@@ -29,7 +31,7 @@ from app.services.sms_service import send_otp_sms
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/send-otp")
+@router.post("/send-otp", response_model=MessageResponse)
 async def send_otp(body: PhoneRequest, db: Session = Depends(get_db)):
     code = generate_otp()
     save_otp(db, body.phone, code, body.user_type)
@@ -133,7 +135,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/reset-password")
+@router.post("/reset-password", response_model=MessageResponse)
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
     # The current frontend does not send user_type here, so we try both types.
     if body.user_type:
@@ -161,7 +163,7 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
     return {"message": "Password changed successfully"}
 
 
-@router.post("/change-password")
+@router.post("/change-password", response_model=MessageResponse)
 def change_password(
     body: ChangePasswordRequest,
     creds=Depends(get_current_user_id),
@@ -185,16 +187,14 @@ def change_password(
     return {"message": "Password changed successfully"}
 
 
-@router.post("/update-fcm-token")
+@router.post("/update-fcm-token", response_model=SuccessResponse)
 def update_fcm_token(
-    body: dict,
+    body: FcmTokenUpdateRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Update FCM token for push notifications."""
-    fcm_token = body.get("fcm_token")
-    if not fcm_token:
-        raise HTTPException(status_code=400, detail="fcm_token required")
+    fcm_token = body.fcm_token
 
     if current_user["type"] == "customer":
         user = db.query(Customer).filter(Customer.id == current_user["id"]).first()
