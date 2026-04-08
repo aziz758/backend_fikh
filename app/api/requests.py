@@ -64,6 +64,31 @@ async def upload_request_image(
     return {"image_url": f"/uploads/{filename}", "url": f"/uploads/{filename}"}
 
 
+@upload_router.post("/profile-image/")
+async def upload_profile_image(
+    request: Request,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    file = form.get("file")
+
+    if not file:
+        raise HTTPException(
+            status_code=400,
+            detail="No image provided. Use field name 'file'",
+        )
+
+    os.makedirs("uploads", exist_ok=True)
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    filename = f"{uuid.uuid4()}.{ext}"
+    filepath = f"uploads/{filename}"
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    return {"image_url": f"/uploads/{filename}"}
+
+
 def _avg_rating(db: Session, technician_id: int) -> float:
     avg = db.query(func.avg(Rating.score)).filter(Rating.technician_id == technician_id).scalar()
     return round(float(avg or 0.0), 1)
