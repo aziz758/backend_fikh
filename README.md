@@ -9,6 +9,7 @@ Fi Khedmtak is a FastAPI backend for an on-demand field service platform that co
 - Service request creation with automatic technician assignment.
 - Request lifecycle: assign, accept, complete, and rate.
 - In-app notifications plus Firebase FCM push notifications.
+- Optional Firebase Realtime sync for request state and technician live location.
 - Technician document upload and account status review.
 - Admin endpoints for statistics, users, requests, ratings, and broadcast notifications.
 
@@ -74,6 +75,10 @@ init_db.py
 create_tables.py
 migrate_requests_v2.py
 migrate_v3.py
+migrate_v4.py
+migrate_v5.py
+migrate_v6.py
+migrate_v7.py
 seed_services.py
 admin_seed.py
 ```
@@ -117,24 +122,48 @@ Main tables defined by SQLAlchemy models:
 
 ### Technicians (`/api/technicians`)
 - `GET /nearby`
+  - query: `service_id`, `customer_lat`, `customer_lng`, optional `max_distance_km`
 
 ### Requests (`/api/requests`)
 - `GET /`
+  - query: `status` (optional), `page` (default `1`), `limit` (default `20`, max `100`)
+  - response: paginated object `{ results, total, page, limit }`
+- `GET /{request_id}`
 - `POST /`
 - `POST /{request_id}/accept`
+- `POST /{request_id}/reject` (requires rejection reason)
 - `POST /{request_id}/complete`
 - `POST /{request_id}/rate`
+  - request responses include direct navigation links when `lat/lng` are available:
+    `google_maps_directions_url`, `apple_maps_directions_url`, `google_navigation_uri`, `geo_navigation_uri`
+  - canonical contract only (legacy `wrapped` query/body is removed)
 
 ### Notifications (`/api/notifications`)
 - `GET /`
+  - query: `unread_only` (optional), `page` (default `1`), `limit` (default `20`, max `100`)
+  - response: paginated object `{ results, total, page, limit }`
+- `GET /unread-count`
 - `POST /{notification_id}/read`
 - `POST /read-all`
 - `DELETE /{notification_id}`
 
+### Customer Profile (`/api/customer/profile`)
+- `GET /me`
+- `PUT /me`
+
 ### Technician Profile (`/api/technician/profile`)
+- `GET /me`
 - `GET /status`
 - `POST /documents`
-- `PUT /status`
+- `PUT /location`
+- `PUT /availability`
+- `PUT /work-settings`
+
+Profile API note:
+- canonical profile routes are `/me` under each profile prefix.
+- legacy aliases remain callable for backward compatibility but are hidden from docs.
+- technician account status updates are admin-only via:
+  `PUT /api/admin/technicians/{technician_id}/status`
 
 ### Admin (`/api/admin`)
 - `GET /statistics`
@@ -161,6 +190,14 @@ When a request is assigned:
 - if pending after timeout, assignment is marked `timeout`,
 - system tries another technician,
 - if no technician is available, request becomes `cancelled` and customer is notified.
+- when technician rejects, the rejection reason is stored and exposed in request logs.
+
+Eligibility note:
+- technicians must have a saved and fresh location (`lat` + `lng`) to receive new assignments.
+- if location expires (based on `TECHNICIAN_LOCATION_TTL_MINUTES`), technician is moved to `offline` automatically.
+- assignment/nearby matching respects `TECHNICIAN_MAX_SERVICE_DISTANCE_KM` when customer location is available.
+- technicians in `on_break` are excluded from receiving new assignments.
+- technician-specific `service_radius_km` and working hours (`work_start_time`, `work_end_time`, `work_days`) are enforced for matching.
 
 ---
 
@@ -196,6 +233,10 @@ python init_db.py
 python create_tables.py
 python migrate_requests_v2.py
 python migrate_v3.py
+python migrate_v4.py
+python migrate_v5.py
+python migrate_v6.py
+python migrate_v7.py
 python seed_services.py
 ```
 
@@ -221,6 +262,14 @@ Optional:
 - `SMS_API_URL`
 - `SMS_API_KEY`
 - `FIREBASE_CREDENTIALS_PATH` (default `firebase_credentials.json`)
+- `FIREBASE_DATABASE_URL` (required only for Realtime Database sync)
+- `TECHNICIAN_WORKING_HOURS_TIMEZONE` (default `Asia/Riyadh`)
+- `TECHNICIAN_LOCATION_TTL_MINUTES` (default `5`)
+- `TECHNICIAN_MAX_SERVICE_DISTANCE_KM` (default `20`)
+- `TECHNICIAN_PRIORITY_DISTANCE_WEIGHT` (default `0.5`)
+- `TECHNICIAN_PRIORITY_RATING_WEIGHT` (default `0.25`)
+- `TECHNICIAN_PRIORITY_ACCEPTANCE_WEIGHT` (default `0.15`)
+- `TECHNICIAN_PRIORITY_COMPLETION_WEIGHT` (default `0.1`)
 
 ---
 
@@ -256,4 +305,4 @@ Optional:
 - Manual migration scripts are used (no Alembic workflow yet).
 - Limited automated test coverage in current codebase.
 - Some endpoints still accept raw `dict` payloads instead of strict schemas.
-- No live tracking/chat features yet.
+- Realtime Database rules and App Check hardening are not configured yet.

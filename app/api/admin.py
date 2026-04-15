@@ -5,13 +5,16 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.dependencies import get_current_user
 from app.database import get_db
 from app.models import Customer, Request, RequestService, Service, Technician, TechnicianService
+from app.models.request_assignment import RequestAssignment
 from app.schemas.admin import (
     BroadcastNotificationRequest,
     BroadcastNotificationResponse,
     TechnicianStatusUpdateRequest,
 )
 from app.schemas.common import SuccessResponse
-from app.services.firebase_service import notify_user
+from app.services.firebase_service import notify_user, sync_technician_realtime
+from app.services.location_service import is_technician_location_fresh
+from app.services.technician_schedule_service import parse_work_days
 
 router = APIRouter()
 
@@ -98,9 +101,17 @@ def _serialize_technician(tech: Technician, services_map: dict[int, list[str]]) 
         "completion_rate": float(tech.completion_rate or 0.0),
         "profile_photo_url": tech.profile_photo_url or "",
         "id_card_photo_url": tech.id_card_photo_url or "",
+        "service_radius_km": float(tech.service_radius_km) if tech.service_radius_km is not None else 0.0,
+        "work_start_time": tech.work_start_time or "",
+        "work_end_time": tech.work_end_time or "",
+        "work_days": sorted(parse_work_days(tech.work_days)),
         "services": services_map.get(tech.id, []),
         "created_at": str(tech.created_at) if tech.created_at else "",
     }
+
+
+def _set_technician_available_if_location_fresh(tech: Technician) -> None:
+    tech.availability_status = "available" if is_technician_location_fresh(tech) else "offline"
 
 
 def _get_request_services_map(db: Session, request_ids: list[int]) -> dict[int, list[str]]:
@@ -125,9 +136,46 @@ def _get_request_services_map(db: Session, request_ids: list[int]) -> dict[int, 
     return services_map
 
 
-def _serialize_request(req: Request, services_map: dict[int, list[str]]) -> dict:
+def _get_request_latest_rejections_map(
+    db: Session,
+    request_ids: list[int],
+) -> dict[int, dict[str, str]]:
+    if not request_ids:
+        return {}
+
+    rows = (
+        db.query(
+            RequestAssignment.request_id,
+            RequestAssignment.reject_reason,
+            RequestAssignment.rejected_at,
+        )
+        .filter(
+            RequestAssignment.request_id.in_(request_ids),
+            RequestAssignment.status == "rejected",
+            RequestAssignment.reject_reason.isnot(None),
+        )
+        .order_by(RequestAssignment.request_id.asc(), RequestAssignment.rejected_at.desc())
+        .all()
+    )
+    latest_map: dict[int, dict[str, str]] = {}
+    for request_id, reject_reason, rejected_at in rows:
+        if request_id in latest_map:
+            continue
+        latest_map[request_id] = {
+            "reason": reject_reason or "",
+            "rejected_at": str(rejected_at) if rejected_at else "",
+        }
+    return latest_map
+
+
+def _serialize_request(
+    req: Request,
+    services_map: dict[int, list[str]],
+    latest_rejections_map: dict[int, dict[str, str]],
+) -> dict:
     customer = req.customer
     technician = req.assigned_technician
+    latest_rejection = latest_rejections_map.get(req.id, {})
     return {
         "id": req.id,
         "status": req.status or "",
@@ -146,6 +194,8 @@ def _serialize_request(req: Request, services_map: dict[int, list[str]]) -> dict
         "services": services_map.get(req.id, []),
         "customer_rating": float(req.customer_rating) if req.customer_rating is not None else 0.0,
         "technician_report": req.technician_report or "",
+        "latest_reject_reason": latest_rejection.get("reason", ""),
+        "latest_rejected_at": latest_rejection.get("rejected_at", ""),
     }
 
 
@@ -217,11 +267,12 @@ def update_technician_status(
 
     technician.status = new_status
     if new_status == "approved":
-        technician.availability_status = "available"
+        _set_technician_available_if_location_fresh(technician)
     elif new_status == "rejected":
         technician.availability_status = "offline"
 
     db.commit()
+    sync_technician_realtime(technician)
 
     if new_status == "approved":
         notify_user(
@@ -269,9 +320,15 @@ def list_requests_for_admin(
         .all()
     )
     services_map = _get_request_services_map(db, [r.id for r in requests_list])
+    latest_rejections_map = _get_request_latest_rejections_map(
+        db,
+        [r.id for r in requests_list],
+    )
 
     return {
-        "results": [_serialize_request(req, services_map) for req in requests_list],
+        "results": [
+            _serialize_request(req, services_map, latest_rejections_map) for req in requests_list
+        ],
         "total": total,
         "page": page,
     }
@@ -519,8 +576,13 @@ def get_admin_dashboard(
         db,
         [req.id for req in recent_requests_query],
     )
+    recent_request_rejections_map = _get_request_latest_rejections_map(
+        db,
+        [req.id for req in recent_requests_query],
+    )
     recent_requests = [
-        _serialize_request(req, recent_request_services_map) for req in recent_requests_query
+        _serialize_request(req, recent_request_services_map, recent_request_rejections_map)
+        for req in recent_requests_query
     ]
 
     pending_technicians_query = (

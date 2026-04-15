@@ -47,6 +47,16 @@ def _get_int(name: str, default: int) -> int:
         return default
 
 
+def _get_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
+
 class Settings:
     def __init__(self) -> None:
         database_url = os.getenv("DATABASE_URL")
@@ -68,6 +78,35 @@ class Settings:
         self.FIREBASE_CREDENTIALS_PATH: str = os.getenv(
             "FIREBASE_CREDENTIALS_PATH",
             "firebase_credentials.json",
+        )
+        self.FIREBASE_DATABASE_URL: str = os.getenv("FIREBASE_DATABASE_URL", "").strip()
+        self.TECHNICIAN_WORKING_HOURS_TIMEZONE: str = os.getenv(
+            "TECHNICIAN_WORKING_HOURS_TIMEZONE",
+            "Asia/Riyadh",
+        )
+        self.TECHNICIAN_LOCATION_TTL_MINUTES: int = max(
+            1,
+            _get_int("TECHNICIAN_LOCATION_TTL_MINUTES", 5),
+        )
+        self.TECHNICIAN_MAX_SERVICE_DISTANCE_KM: float = max(
+            1.0,
+            _get_float("TECHNICIAN_MAX_SERVICE_DISTANCE_KM", 20.0),
+        )
+        self.TECHNICIAN_PRIORITY_DISTANCE_WEIGHT: float = max(
+            0.0,
+            _get_float("TECHNICIAN_PRIORITY_DISTANCE_WEIGHT", 0.5),
+        )
+        self.TECHNICIAN_PRIORITY_RATING_WEIGHT: float = max(
+            0.0,
+            _get_float("TECHNICIAN_PRIORITY_RATING_WEIGHT", 0.25),
+        )
+        self.TECHNICIAN_PRIORITY_ACCEPTANCE_WEIGHT: float = max(
+            0.0,
+            _get_float("TECHNICIAN_PRIORITY_ACCEPTANCE_WEIGHT", 0.15),
+        )
+        self.TECHNICIAN_PRIORITY_COMPLETION_WEIGHT: float = max(
+            0.0,
+            _get_float("TECHNICIAN_PRIORITY_COMPLETION_WEIGHT", 0.1),
         )
 
 

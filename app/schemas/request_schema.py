@@ -1,10 +1,12 @@
 ﻿from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     note: Optional[str] = None
     image_url: Optional[str] = None
     service_ids: List[int] = Field(..., min_length=1)
@@ -14,33 +16,29 @@ class RequestCreate(BaseModel):
     address: Optional[str] = None
 
 
-class RequestCreateWrapped(BaseModel):
-    request: RequestCreate
-
-
 class RequestComplete(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     report: str = Field(..., min_length=1)
 
 
-class RequestCompleteWrapped(BaseModel):
-    request: RequestComplete
-
-
 class RequestRate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     rating: float = Field(..., ge=1, le=5)
     comment: Optional[str] = None
 
 
-class RequestRateWrapped(BaseModel):
-    request: RequestRate
-
-
 class RequestCancel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     reason: Optional[str] = None
 
 
-class RequestCancelWrapped(BaseModel):
-    request: RequestCancel
+class RequestReject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=2, max_length=300)
 
 
 class RequestResponse(BaseModel):
@@ -69,6 +67,19 @@ class RequestResponse(BaseModel):
     assigned_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    latest_reject_reason: Optional[str] = None
+    latest_rejected_at: Optional[datetime] = None
+    google_maps_directions_url: Optional[str] = None
+    apple_maps_directions_url: Optional[str] = None
+    google_navigation_uri: Optional[str] = None
+    geo_navigation_uri: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class RequestListResponse(BaseModel):
+    results: List[RequestResponse] = Field(default_factory=list)
+    total: int
+    page: int
+    limit: int

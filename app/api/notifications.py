@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
@@ -11,6 +11,8 @@ router = APIRouter()
 @router.get("/")
 def get_notifications(
     unread_only: int = 0,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -21,7 +23,13 @@ def get_notifications(
     if unread_only == 1:
         query = query.filter(Notification.is_read.is_(False))
 
-    notifications = query.order_by(Notification.created_at.desc()).all()
+    total = query.count()
+    notifications = (
+        query.order_by(Notification.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
     results = [
         {
             "id": n.id,
@@ -33,7 +41,29 @@ def get_notifications(
         }
         for n in notifications
     ]
-    return {"results": results}
+    return {
+        "results": results,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    }
+
+
+@router.get("/unread-count")
+def get_unread_count(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    unread_count = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == current_user["id"],
+            Notification.user_type == current_user["type"],
+            Notification.is_read.is_(False),
+        )
+        .count()
+    )
+    return {"unread_count": int(unread_count)}
 
 
 @router.post("/{notification_id}/read")

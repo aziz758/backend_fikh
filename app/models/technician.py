@@ -26,13 +26,18 @@ class Technician(Base):
     password_hash = Column(String(255), nullable=False)
     status = Column(String(20), default="pending_documents")  # pending_documents, pending_approval, approved, rejected
     fcm_token = Column(String(255), nullable=True)
-    availability_status = Column(String(20), default="offline")  # available, busy, offline
+    availability_status = Column(String(20), default="offline")  # available, busy, offline, on_break
     avg_rating = Column(Float, default=0.0)
     total_ratings = Column(Integer, default=0)
     acceptance_rate = Column(Float, default=0.0)
     completion_rate = Column(Float, default=0.0)
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
+    location_updated_at = Column(DateTime(timezone=True), nullable=True)
+    service_radius_km = Column(Float, nullable=True)
+    work_start_time = Column(String(5), nullable=True)  # HH:MM
+    work_end_time = Column(String(5), nullable=True)  # HH:MM
+    work_days = Column(String(32), nullable=True)  # CSV weekdays, 0=Mon .. 6=Sun
     # Optional profile metadata (specializations or aggregate rating context).
     specializations = Column(String(255), nullable=True)
     profile_photo_url = Column(String(500), nullable=True)

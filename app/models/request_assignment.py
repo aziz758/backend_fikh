@@ -13,3 +13,5 @@ class RequestAssignment(Base):
     assigned_at = Column(DateTime(timezone=True), server_default=func.now())
     status = Column(String(20), default="pending", nullable=False)  # pending, accepted, rejected, timeout, cancelled
     timeout_at = Column(DateTime(timezone=True), nullable=True)
+    reject_reason = Column(String(300), nullable=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)

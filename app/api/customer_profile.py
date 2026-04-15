@@ -16,7 +16,7 @@ def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
     return customer
 
 
-@router.get("", response_model=CustomerResponse)
+@router.get("", response_model=CustomerResponse, include_in_schema=False)
 @router.get("/", response_model=CustomerResponse, include_in_schema=False)
 @router.get("/me", response_model=CustomerResponse)
 @router.get("/me/", response_model=CustomerResponse, include_in_schema=False)
@@ -28,7 +28,7 @@ def get_my_profile(
     return customer
 
 
-@router.put("", response_model=CustomerResponse)
+@router.put("", response_model=CustomerResponse, include_in_schema=False)
 @router.put("/", response_model=CustomerResponse, include_in_schema=False)
 @router.put("/me", response_model=CustomerResponse)
 @router.put("/me/", response_model=CustomerResponse, include_in_schema=False)
