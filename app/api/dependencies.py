@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models import Customer, Technician
 from app.services.auth_service import decode_token
 
 security = HTTPBearer(auto_error=False)
@@ -11,13 +12,30 @@ security = HTTPBearer(auto_error=False)
 
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    db: Session = Depends(get_db),
 ):
     if not credentials or not credentials.credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is required")
     payload = decode_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    return payload.get("user_id"), payload.get("user_type")
+
+    user_id = payload.get("user_id")
+    user_type = payload.get("user_type")
+    if not user_id or user_type not in {"customer", "technician"}:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    if user_type == "customer":
+        user = db.query(Customer).filter(Customer.id == user_id).first()
+    else:
+        user = db.query(Technician).filter(Technician.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    if getattr(user, "status", None) == "inactive":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+
+    return user_id, user_type
 
 
 def _is_admin_customer(db: Session, user_id: int) -> bool:

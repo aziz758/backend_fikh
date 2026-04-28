@@ -21,9 +21,11 @@ from app.services.auth_service import (
     hash_password,
     verify_password,
     create_access_token,
+    create_registration_token,
     generate_otp,
     save_otp,
     verify_otp,
+    verify_registration_token,
     get_user_by_phone,
 )
 from app.services.sms_service import send_otp_sms
@@ -50,7 +52,15 @@ def verify_otp_endpoint(body: OtpVerify, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     user = get_user_by_phone(db, body.phone, body.user_type)
     if not user:
-        return {"verified": True, "registered": False, "phone": body.phone}
+        registration_token = create_registration_token(body.phone, body.user_type)
+        return {
+            "verified": True,
+            "registered": False,
+            "phone": body.phone,
+            "registration_token": registration_token,
+        }
+    if getattr(user, "status", None) == "inactive":
+        raise HTTPException(status_code=403, detail="Account is inactive")
     token = create_access_token(
         {"user_id": user.id, "user_type": body.user_type, "sub": body.phone}
     )
@@ -66,6 +76,8 @@ def verify_otp_endpoint(body: OtpVerify, db: Session = Depends(get_db)):
 
 @router.post("/register/customer")
 def register_customer(body: CustomerCreate, db: Session = Depends(get_db)):
+    if not verify_registration_token(body.registration_token, body.phone, "customer"):
+        raise HTTPException(status_code=400, detail="Invalid or expired registration token")
     if db.query(Customer).filter(Customer.phone == body.phone).first():
         raise HTTPException(status_code=400, detail="This phone number is already registered")
     if db.query(Technician).filter(Technician.phone == body.phone).first():
@@ -90,6 +102,8 @@ def register_customer(body: CustomerCreate, db: Session = Depends(get_db)):
 
 @router.post("/register/technician")
 def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
+    if not verify_registration_token(body.registration_token, body.phone, "technician"):
+        raise HTTPException(status_code=400, detail="Invalid or expired registration token")
     if db.query(Technician).filter(Technician.phone == body.phone).first():
         raise HTTPException(status_code=400, detail="This phone number is already registered")
     if db.query(Customer).filter(Customer.phone == body.phone).first():
@@ -125,6 +139,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Phone number or password is incorrect")
     if not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Phone number or password is incorrect")
+    if getattr(user, "status", None) == "inactive":
+        raise HTTPException(status_code=403, detail="Account is inactive")
     token = create_access_token(
         {"user_id": user.id, "user_type": body.user_type, "sub": body.phone}
     )

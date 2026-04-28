@@ -1,7 +1,8 @@
 ﻿import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import admin, auth, customer_profile, notifications, requests, services, technician_profile, technicians
@@ -12,6 +13,13 @@ app = FastAPI(title="Fi Khedmtak API", version="1.0")
 
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+
+@app.middleware("http")
+async def block_public_document_uploads(request: Request, call_next):
+    if request.url.path.startswith("/uploads/documents"):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,

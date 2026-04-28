@@ -1,6 +1,3 @@
-import os
-import shutil
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -29,11 +26,18 @@ from app.services.technician_schedule_service import (
     parse_work_days,
     serialize_work_days,
 )
+from app.services.upload_service import (
+    LEGACY_TECHNICIAN_DOCUMENTS_DIR,
+    PRIVATE_TECHNICIAN_DOCUMENTS_DIR,
+    PUBLIC_TECHNICIAN_PROFILE_UPLOAD_DIR,
+    protected_upload_file_response,
+    public_upload_url,
+    save_validated_image_upload,
+)
 
 router = APIRouter()
 profile_alias_router = APIRouter(prefix="/profile")
-UPLOAD_DIR = "uploads/documents"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+ID_CARD_DOCUMENT_URL = "/api/technician/profile/documents/id-card"
 
 
 def _get_current_technician(current_user, db: Session) -> Technician:
@@ -64,8 +68,8 @@ def _serialize_technician_profile(tech: Technician) -> TechnicianProfileResponse
         total_ratings=int(tech.total_ratings or 0),
         acceptance_rate=float(tech.acceptance_rate or 0.0),
         completion_rate=float(tech.completion_rate or 0.0),
-        profile_photo_url=tech.profile_photo_url,
-        id_card_photo_url=tech.id_card_photo_url,
+        profile_photo_url=public_upload_url(tech.profile_photo_url),
+        id_card_photo_url=ID_CARD_DOCUMENT_URL if tech.id_card_photo_url else None,
     )
 
 
@@ -214,24 +218,31 @@ def upload_documents(
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
 
-    profile_ext = (profile_photo.filename or "jpg").split(".")[-1]
-    profile_filename = f"{uuid.uuid4()}.{profile_ext}"
-    profile_path = os.path.join(UPLOAD_DIR, profile_filename)
-    with open(profile_path, "wb") as f:
-        shutil.copyfileobj(profile_photo.file, f)
+    profile_upload = save_validated_image_upload(
+        profile_photo,
+        PUBLIC_TECHNICIAN_PROFILE_UPLOAD_DIR,
+        public_prefix=f"/{PUBLIC_TECHNICIAN_PROFILE_UPLOAD_DIR}",
+    )
+    id_upload = save_validated_image_upload(id_card_photo, PRIVATE_TECHNICIAN_DOCUMENTS_DIR)
 
-    id_ext = (id_card_photo.filename or "jpg").split(".")[-1]
-    id_filename = f"{uuid.uuid4()}.{id_ext}"
-    id_path = os.path.join(UPLOAD_DIR, id_filename)
-    with open(id_path, "wb") as f:
-        shutil.copyfileobj(id_card_photo.file, f)
-
-    tech.profile_photo_url = profile_path
-    tech.id_card_photo_url = id_path
+    tech.profile_photo_url = profile_upload.url
+    tech.id_card_photo_url = id_upload.path
     tech.status = "pending_approval"
     db.commit()
 
     return {"success": True, "status": "pending_approval"}
+
+
+@router.get("/documents/id-card", include_in_schema=False)
+def get_my_id_card_document(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tech = _get_current_technician(current_user, db)
+    return protected_upload_file_response(
+        tech.id_card_photo_url,
+        allowed_dirs=[PRIVATE_TECHNICIAN_DOCUMENTS_DIR, LEGACY_TECHNICIAN_DOCUMENTS_DIR],
+    )
 
 
 @router.put("/location", response_model=TechnicianLocationUpdateResponse)

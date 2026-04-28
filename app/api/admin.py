@@ -15,6 +15,12 @@ from app.schemas.common import SuccessResponse
 from app.services.firebase_service import notify_user, sync_technician_realtime
 from app.services.location_service import is_technician_location_fresh
 from app.services.technician_schedule_service import parse_work_days
+from app.services.upload_service import (
+    LEGACY_TECHNICIAN_DOCUMENTS_DIR,
+    PRIVATE_TECHNICIAN_DOCUMENTS_DIR,
+    protected_upload_file_response,
+    public_upload_url,
+)
 
 router = APIRouter()
 
@@ -89,6 +95,7 @@ def _get_technician_services_map(db: Session, technician_ids: list[int]) -> dict
 
 
 def _serialize_technician(tech: Technician, services_map: dict[int, list[str]]) -> dict:
+    id_card_document_url = f"/api/admin/technicians/{tech.id}/documents/id-card" if tech.id_card_photo_url else ""
     return {
         "id": tech.id,
         "name": tech.name or "",
@@ -99,8 +106,8 @@ def _serialize_technician(tech: Technician, services_map: dict[int, list[str]]) 
         "total_ratings": int(tech.total_ratings or 0),
         "acceptance_rate": float(tech.acceptance_rate or 0.0),
         "completion_rate": float(tech.completion_rate or 0.0),
-        "profile_photo_url": tech.profile_photo_url or "",
-        "id_card_photo_url": tech.id_card_photo_url or "",
+        "profile_photo_url": public_upload_url(tech.profile_photo_url) or "",
+        "id_card_photo_url": id_card_document_url,
         "service_radius_km": float(tech.service_radius_km) if tech.service_radius_km is not None else 0.0,
         "work_start_time": tech.work_start_time or "",
         "work_end_time": tech.work_end_time or "",
@@ -294,6 +301,22 @@ def update_technician_status(
         )
 
     return {"success": True}
+
+
+@router.get("/technicians/{technician_id}/documents/id-card", include_in_schema=False)
+def get_technician_id_card_document(
+    technician_id: int,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    technician = db.query(Technician).filter(Technician.id == technician_id).first()
+    if not technician:
+        raise HTTPException(status_code=404, detail="Technician not found")
+
+    return protected_upload_file_response(
+        technician.id_card_photo_url,
+        allowed_dirs=[PRIVATE_TECHNICIAN_DOCUMENTS_DIR, LEGACY_TECHNICIAN_DOCUMENTS_DIR],
+    )
 
 
 @router.get("/requests")

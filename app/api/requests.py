@@ -1,6 +1,3 @@
-﻿import os
-import shutil
-import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -34,6 +31,7 @@ from app.services.request_state_machine import (
     InvalidRequestStatusTransition,
     apply_request_status_transition,
 )
+from app.services.upload_service import save_validated_image_upload
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 upload_router = APIRouter()
@@ -59,13 +57,8 @@ async def upload_request_image(
             detail="No image provided. Use field name 'file' or 'image'",
         )
 
-    os.makedirs("uploads", exist_ok=True)
-    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-    filename = f"{uuid.uuid4()}.{ext}"
-    filepath = f"uploads/{filename}"
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    return {"image_url": f"/uploads/{filename}", "url": f"/uploads/{filename}"}
+    saved = save_validated_image_upload(file, "uploads", public_prefix="/uploads")
+    return {"image_url": saved.url, "url": saved.url}
 
 
 @upload_router.post("/profile-image/")
@@ -83,14 +76,8 @@ async def upload_profile_image(
             detail="No image provided. Use field name 'file'",
         )
 
-    os.makedirs("uploads", exist_ok=True)
-    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-    filename = f"{uuid.uuid4()}.{ext}"
-    filepath = f"uploads/{filename}"
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    return {"image_url": f"/uploads/{filename}"}
+    saved = save_validated_image_upload(file, "uploads", public_prefix="/uploads")
+    return {"image_url": saved.url}
 
 
 def _avg_rating(db: Session, technician_id: int) -> float:

@@ -7,6 +7,7 @@ class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     phone: str = Field(..., min_length=10, max_length=20)
     password: str = Field(..., min_length=6)
+    registration_token: str = Field(..., min_length=20)
 
 
 class CustomerResponse(BaseModel):
