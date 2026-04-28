@@ -1,5 +1,11 @@
 from app.models.customer import Customer
-from app.models.technician import Technician, TechnicianService
+from app.models.location import District, Governorate
+from app.models.technician import (
+    Technician,
+    TechnicianService,
+    TechnicianServiceArea,
+    TechnicianServiceRequest,
+)
 from app.models.service import Service
 from app.models.request import Request, RequestService
 from app.models.review import Review
@@ -10,8 +16,12 @@ from app.models.request_assignment import RequestAssignment
 
 __all__ = [
     "Customer",
+    "District",
+    "Governorate",
     "Technician",
     "TechnicianService",
+    "TechnicianServiceArea",
+    "TechnicianServiceRequest",
     "Service",
     "Request",
     "RequestService",

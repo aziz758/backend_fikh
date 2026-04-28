@@ -15,7 +15,7 @@ from app.schemas.common import MessageResponse, SuccessResponse
 from app.schemas.customer import CustomerCreate
 from app.schemas.technician import TechnicianCreate
 from app.models import Customer, Technician
-from app.models.technician import TechnicianService
+from app.models.technician import TechnicianService, TechnicianServiceRequest
 from app.api.dependencies import get_current_user, get_current_user_id
 from app.services.auth_service import (
     hash_password,
@@ -28,6 +28,7 @@ from app.services.auth_service import (
     verify_registration_token,
     get_user_by_phone,
 )
+from app.services.location_validation_service import validate_area_selection
 from app.services.sms_service import send_otp_sms
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -82,10 +83,18 @@ def register_customer(body: CustomerCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="This phone number is already registered")
     if db.query(Technician).filter(Technician.phone == body.phone).first():
         raise HTTPException(status_code=400, detail="This phone number is already registered")
+    validate_area_selection(
+        db,
+        governorate_id=body.governorate_id,
+        district_id=body.district_id,
+    )
     customer = Customer(
         name=body.name,
         phone=body.phone,
         password_hash=hash_password(body.password),
+        governorate_id=body.governorate_id,
+        district_id=body.district_id,
+        address_details=body.address_details,
     )
     db.add(customer)
     db.commit()
@@ -121,6 +130,15 @@ def register_technician(body: TechnicianCreate, db: Session = Depends(get_db)):
     for sid in body.service_ids:
         link = TechnicianService(technician_id=tech.id, service_id=sid)
         db.add(link)
+    custom_service_name = body.custom_service_name or body.other_service_name
+    if custom_service_name:
+        db.add(
+            TechnicianServiceRequest(
+                technician_id=tech.id,
+                requested_name=custom_service_name,
+                status="pending",
+            )
+        )
     db.commit()
     token = create_access_token(
         {"user_id": tech.id, "user_type": "technician", "sub": body.phone}

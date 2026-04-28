@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin, auth, customer_profile, notifications, requests, services, technician_profile, technicians
+from app.api import admin, auth, customer_profile, locations, notifications, requests, services, technician_profile, technicians
 from app.api.requests import upload_router
 from app.database import engine, Base
 
@@ -31,6 +31,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
+app.include_router(locations.router, prefix="/api")
 app.include_router(requests.router, prefix="/api")
 app.include_router(upload_router, prefix="/api/uploads", tags=["Uploads"])
 app.include_router(technicians.router, prefix="/api")

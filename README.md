@@ -90,6 +90,8 @@ Main tables defined by SQLAlchemy models:
 - `customers`
 - `technicians`
 - `technician_services`
+- `technician_service_areas`
+- `technician_service_requests`
 - `services`
 - `requests`
 - `request_services`
@@ -98,6 +100,8 @@ Main tables defined by SQLAlchemy models:
 - `reviews`
 - `otp_verifications`
 - `notifications`
+- `governorates`
+- `districts`
 
 ---
 
@@ -120,9 +124,20 @@ Main tables defined by SQLAlchemy models:
 ### Services (`/api/services`)
 - `GET /`
 
+### Locations (`/api/locations`)
+- `GET /governorates`
+  - query: `include_inactive` optional, default `false`
+- `GET /districts`
+  - query: `governorate_id`, optional `include_inactive` default `false`
+
 ### Technicians (`/api/technicians`)
+- `GET /top`
+  - query: `service_id`, optional `governorate_id`, optional `district_id`, optional `limit`
+  - returns approved technicians ranked for browsing by area reputation.
+  - does not require technician availability or fresh live location.
 - `GET /nearby`
   - query: `service_id`, `customer_lat`, `customer_lng`, optional `max_distance_km`
+  - returns only available technicians with fresh live location and now includes `profile_photo_url`.
 
 ### Requests (`/api/requests`)
 - `GET /`
@@ -156,6 +171,9 @@ Main tables defined by SQLAlchemy models:
 - `GET /status`
 - `POST /documents`
 - `PUT /location`
+- `PUT /area`
+- `GET /service-areas`
+- `PUT /service-areas`
 - `PUT /availability`
 - `PUT /work-settings`
 
@@ -238,7 +256,13 @@ python migrate_v5.py
 python migrate_v6.py
 python migrate_v7.py
 python migrate_v8_otp_hash.py
+python migrate_v9_locations.py
+python migrate_v10_user_area_fields.py
+python migrate_v11_technician_service_areas.py
+python migrate_v12_request_rating_area_context.py
+python migrate_v13_technician_service_requests.py
 python seed_services.py
+python seed_locations.py
 ```
 
 ### 5) Run server
@@ -519,9 +543,14 @@ Frontend action:
   "name": "Customer Name",
   "phone": "0501234567",
   "password": "secret123",
-  "registration_token": "..."
+  "registration_token": "...",
+  "governorate_id": 4,
+  "district_id": 28,
+  "address_details": "Near the main street"
 }
 ```
+
+Customer area fields are optional during rollout, but if `district_id` is sent then `governorate_id` must also be sent and the district must belong to that governorate.
 
 `POST /api/auth/register/technician` now requires:
 ```json
@@ -530,9 +559,12 @@ Frontend action:
   "phone": "0501234567",
   "password": "secret123",
   "registration_token": "...",
-  "service_ids": [1, 2]
+  "service_ids": [1, 2],
+  "custom_service_name": "تركيب وصيانة أبواب زجاج"
 }
 ```
+
+`custom_service_name` is optional. If sent, it creates a pending admin-review request and does not appear to customers until the admin approves and links it to an official service.
 
 Error handling:
 - Invalid or expired registration token returns `400`.
@@ -607,13 +639,216 @@ Public access blocked:
 - New ID cards are stored privately under `private_uploads/technician_documents`.
 - New technician profile photos remain public under `/uploads/technician_profiles`.
 
-### Backend deployment note for frontend testing
-Before testing OTP registration on an existing database, run:
-```bash
-python migrate_v8_otp_hash.py
+### Locations and area selection
+Use these endpoints to populate governorate and district selectors:
+
+`GET /api/locations/governorates`
+```json
+[
+  {
+    "id": 4,
+    "name_ar": "تعز",
+    "name_en": "Taiz",
+    "is_active": true
+  }
+]
 ```
 
-Without this migration, hashed OTP values may not fit in the old `otp_verifications.code` column.
+`GET /api/locations/districts?governorate_id=4`
+```json
+[
+  {
+    "id": 28,
+    "governorate_id": 4,
+    "name_ar": "القاهرة",
+    "name_en": "Al Qahirah",
+    "is_active": true
+  }
+]
+```
+
+Frontend rules:
+- Load governorates first.
+- After the user picks a governorate, load districts using `governorate_id`.
+- If `district_id` is sent, `governorate_id` must also be sent.
+- The backend rejects mismatched governorate/district pairs with `400`.
+
+### Customer area fields
+Customer registration can now send area fields:
+```json
+{
+  "name": "Customer Name",
+  "phone": "0501234567",
+  "password": "secret123",
+  "registration_token": "...",
+  "governorate_id": 4,
+  "district_id": 28,
+  "address_details": "Near the main street"
+}
+```
+
+Customer profile response now includes:
+- `governorate_id`
+- `governorate_name`
+- `district_id`
+- `district_name`
+- `address_details`
+
+Customer profile update:
+- `PUT /api/customer/profile/me`
+- Area fields are optional, but at least one field must be sent.
+
+### Technician primary area and service areas
+Technician primary area:
+- `PUT /api/technician/profile/area`
+
+Request:
+```json
+{
+  "governorate_id": 4,
+  "district_id": 28,
+  "address_details": "Workshop address or landmark"
+}
+```
+
+Technician service areas:
+- `GET /api/technician/profile/service-areas`
+- `PUT /api/technician/profile/service-areas`
+
+Request:
+```json
+{
+  "service_areas": [
+    {
+      "governorate_id": 4,
+      "district_id": null
+    },
+    {
+      "governorate_id": 2,
+      "district_id": 15
+    }
+  ]
+}
+```
+
+Meaning:
+- `district_id: null` means the technician serves the full governorate.
+- A concrete `district_id` means the technician serves that specific district only.
+- Do not send a full-governorate area and district-level areas for the same governorate together.
+
+### Technician browsing vs live nearby matching
+Use two different screens/flows:
+
+`GET /api/technicians/top`:
+- Use this when the customer taps a service like `كهربائي` and wants to browse multiple highly rated technicians.
+- Shows approved technicians even if they are offline.
+- Does not require fresh live location.
+- Ranks by area match, ratings, positive comments, completion rate, and acceptance rate.
+- Good for a directory/listing screen.
+
+Query:
+```http
+GET /api/technicians/top?service_id=1&governorate_id=4&district_id=28&limit=20
+```
+
+Response shape:
+```json
+{
+  "results": [
+    {
+      "id": 2,
+      "name": "Ahmed",
+      "phone": "0501234567",
+      "status": "approved",
+      "availability_status": "offline",
+      "profile_photo_url": "/uploads/technician_profiles/example.jpg",
+      "services": [
+        {
+          "id": 1,
+          "name": "كهربائي"
+        }
+      ],
+      "governorate_id": 4,
+      "governorate_name": "تعز",
+      "district_id": 28,
+      "district_name": "القاهرة",
+      "address_details": "Near the main street",
+      "avg_rating": 4.5,
+      "total_ratings": 2,
+      "area_avg_rating": 4.8,
+      "area_total_ratings": 5,
+      "positive_comment_count": 3,
+      "positive_comments_scope": "area",
+      "positive_comments": [
+        {
+          "id": 12,
+          "request_id": 44,
+          "score": 5.0,
+          "comment": "فني ممتاز وسريع",
+          "created_at": "2026-04-28T10:00:00"
+        }
+      ],
+      "area_match": "service_district",
+      "acceptance_rate": 0.8,
+      "completion_rate": 0.9,
+      "ranking_score": 340.15
+    }
+  ],
+  "total": 1,
+  "limit": 20
+}
+```
+
+`positive_comments_scope`:
+- `area`: comments are from ratings linked to requests in the selected area.
+- `global`: comments are general technician comments, usually because old ratings are not area-linked yet.
+
+`GET /api/technicians/nearby`:
+- Use this only for immediate/live matching flows.
+- Requires the technician to be approved, available, inside distance, inside work hours, without active accepted request, and with fresh `lat/lng`.
+- Now includes `profile_photo_url`, but the strict matching rules are unchanged.
+
+Query:
+```http
+GET /api/technicians/nearby?service_id=1&customer_lat=14.8282&customer_lng=42.9700
+```
+
+### Request area context
+`POST /api/requests/` now accepts optional area fields:
+```json
+{
+  "service_ids": [1],
+  "note": "Need electrical repair",
+  "lat": 14.8282,
+  "lng": 42.97,
+  "address": "Customer selected map address",
+  "governorate_id": 4,
+  "district_id": 28
+}
+```
+
+If the request does not send `governorate_id` and `district_id`, the backend uses the customer's saved area when available.
+
+Request responses include:
+- `governorate_id`
+- `governorate_name`
+- `district_id`
+- `district_name`
+
+Ratings submitted through `POST /api/requests/{request_id}/rate` are linked to the request, which lets `/api/technicians/top` calculate area-specific reputation over time.
+
+### Backend deployment note for frontend testing
+Before testing the new frontend flows on an existing database, run:
+```bash
+python migrate_v8_otp_hash.py
+python migrate_v9_locations.py
+python migrate_v10_user_area_fields.py
+python migrate_v11_technician_service_areas.py
+python migrate_v12_request_rating_area_context.py
+python seed_locations.py
+```
+
+Without these migrations, OTP hashing, area selectors, technician service areas, and area-linked ratings may not work correctly.
 
 ---
 
@@ -704,125 +939,530 @@ Completed:
 - Documented the proposed endpoint contract for frontend planning.
 
 Remaining:
-- Continue with Task 1.
+- Continue with Task 2.
 
 ### Task 1 - Add governorates and districts
-Status: Pending.
+Status: Done.
 
 Goal:
 - Add stable administrative location tables for customers, technicians, and requests.
 
-Expected changes:
+Completed:
 - Add `Governorate` model.
 - Add `District` model.
-- Add migration script.
-- Add seed script for initial governorates and districts.
+- Add `migrate_v9_locations.py`.
+- Add `seed_locations.py` with initial Yemeni governorates and common districts.
 - Add location list endpoints:
   - `GET /api/locations/governorates`
   - `GET /api/locations/districts?governorate_id=...`
 
+Validation:
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Run `python migrate_v9_locations.py` successfully.
+- Run `python seed_locations.py` successfully; seeded `22` governorates and `162` districts in the current development database.
+- Verify `GET /api/locations/governorates` returns `200`.
+- Verify `GET /api/locations/districts?governorate_id=...` returns `200`.
+
+Remaining:
+- Continue with Task 3.
+
 ### Task 2 - Add area fields to customers and technicians
-Status: Pending.
+Status: Done.
 
 Goal:
 - Store each user's primary administrative area.
 
-Expected fields:
+Completed fields:
 - `governorate_id`
 - `district_id`
 - `address_details`
 
-Expected updates:
+Completed updates:
 - Customer model and schemas.
 - Technician model and schemas.
 - Customer profile response/update.
 - Technician profile response/update.
+- Added `migrate_v10_user_area_fields.py`.
+- Added area validation so a district must belong to the selected governorate.
+- Added technician primary area update endpoint:
+  - `PUT /api/technician/profile/area`
+
+Validation:
+- Run `python migrate_v10_user_area_fields.py` successfully.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify customer profile serialization includes area fields.
+- Verify technician profile serialization includes area fields.
+- Verify invalid district/governorate combinations return `400`.
+
+Remaining:
+- Task 3 still needs to let customer registration submit the area during account creation.
+- Task 4 still needs technician service areas for serving multiple governorates/districts.
 
 ### Task 3 - Update customer registration and profile
-Status: Pending.
+Status: Done.
 
 Goal:
 - Let customers provide or update their governorate/district.
 
-Expected updates:
-- `POST /api/auth/register/customer`
-- `GET /api/customer/profile/me`
-- `PUT /api/customer/profile/me`
+Completed:
+- `POST /api/auth/register/customer` now accepts optional area fields:
+  - `governorate_id`
+  - `district_id`
+  - `address_details`
+- Customer registration validates that the district belongs to the selected governorate.
+- `GET /api/customer/profile/me` returns the customer's area fields and names.
+- `PUT /api/customer/profile/me` updates the customer's area fields.
+- The new registration fields are optional to keep old frontend clients working during rollout.
+
+Validation:
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `CustomerCreate` accepts optional area fields.
+- Verify invalid district/governorate combinations return `400`.
+
+Remaining:
+- Continue with Task 5.
 
 ### Task 4 - Add technician service areas
-Status: Pending.
+Status: Done.
 
 Goal:
 - Let technicians serve one or more areas.
 
-Expected changes:
+Completed:
 - Add `technician_service_areas` table.
 - Allow district-level service areas.
 - Allow governorate-level service areas when `district_id` is empty.
-- Add technician profile endpoint for managing service areas.
+- Add `migrate_v11_technician_service_areas.py`.
+- Add technician profile endpoints for managing service areas:
+  - `GET /api/technician/profile/service-areas`
+  - `PUT /api/technician/profile/service-areas`
+- The `PUT` endpoint replaces the technician's full service-area list.
+- Duplicate service areas are rejected.
+- A governorate-level service area cannot be combined with district-level areas in the same governorate.
+
+Example `PUT /api/technician/profile/service-areas` request:
+```json
+{
+  "service_areas": [
+    {
+      "governorate_id": 4,
+      "district_id": null
+    },
+    {
+      "governorate_id": 2,
+      "district_id": 15
+    }
+  ]
+}
+```
+
+Response:
+```json
+[
+  {
+    "id": 1,
+    "governorate_id": 4,
+    "governorate_name": "تعز",
+    "district_id": null,
+    "district_name": null,
+    "scope": "governorate"
+  }
+]
+```
+
+Validation:
+- Run `python migrate_v11_technician_service_areas.py` successfully.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify service-area routes exist.
+- Verify service-area validation rejects duplicates and overlapping governorate/district scopes.
+
+Remaining:
+- Continue with Task 6.
 
 ### Task 5 - Store request and rating area context
-Status: Pending.
+Status: Done.
 
 Goal:
 - Make ratings searchable by area.
 
-Expected changes:
+Completed:
 - Add `governorate_id` and `district_id` to requests.
 - Add `request_id` to ratings.
 - Store the request area when the customer creates a request.
-- Use request-linked ratings to calculate area-specific reputation.
+- Add `migrate_v12_request_rating_area_context.py`.
+- Request create accepts optional area fields:
+  - `governorate_id`
+  - `district_id`
+- If the request does not include area fields, the backend uses the customer's saved area.
+- Request responses now include:
+  - `governorate_id`
+  - `governorate_name`
+  - `district_id`
+  - `district_name`
+- Ratings created through `POST /api/requests/{request_id}/rate` now store `request_id`.
+
+Validation:
+- Run `python migrate_v12_request_rating_area_context.py` successfully.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `RequestCreate` accepts optional area fields.
+- Verify request response serialization includes area fields.
+- Verify new rating rows can link back to the rated request.
+
+Remaining:
+- Task 6 still needs to calculate and expose area-specific technician reputation in `/api/technicians/top`.
 
 ### Task 6 - Add top technicians endpoint
-Status: Pending.
+Status: Done.
 
 Goal:
 - Return multiple highly rated technicians for a service and area.
 
-Expected endpoint:
+Completed endpoint:
 - `GET /api/technicians/top`
 
-Expected behavior:
+Completed behavior:
 - Include approved technicians only.
 - Do not require live availability.
 - Do not require fresh location.
 - Rank by area match, ratings, comments, and reliability metrics.
+- Supports optional area filters:
+  - `governorate_id`
+  - `district_id`
+- Matches technicians by their primary area or `technician_service_areas`.
+- Returns a paginated-style object:
+```json
+{
+  "results": [
+    {
+      "id": 2,
+      "name": "Ahmed",
+      "status": "approved",
+      "availability_status": "offline",
+      "profile_photo_url": "/uploads/technician_profiles/example.jpg",
+      "services": [
+        {
+          "id": 1,
+          "name": "كهربائي"
+        }
+      ],
+      "governorate_id": 4,
+      "governorate_name": "تعز",
+      "district_id": 28,
+      "district_name": "القاهرة",
+      "avg_rating": 4.5,
+      "total_ratings": 2,
+      "area_avg_rating": 0.0,
+      "area_total_ratings": 0,
+      "positive_comment_count": 1,
+      "positive_comments_scope": "global",
+      "positive_comments": [
+        {
+          "id": 12,
+          "request_id": 44,
+          "score": 5.0,
+          "comment": "فني ممتاز وسريع",
+          "created_at": "2026-04-28T10:00:00"
+        }
+      ],
+      "area_match": "service_governorate",
+      "acceptance_rate": 0.8,
+      "completion_rate": 0.9,
+      "ranking_score": 240.15
+    }
+  ],
+  "total": 1,
+  "limit": 20
+}
+```
+
+Validation:
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `GET /api/technicians/top?service_id=...` returns `200`.
+- Verify invalid area combinations return `400`.
+
+Remaining:
+- Continue with Task 8.
 
 ### Task 7 - Return photos, ratings, and comments
-Status: Pending.
+Status: Done.
 
 Goal:
 - Provide enough data for the frontend technician cards.
 
-Expected response fields:
-- public profile photo URL.
-- average rating.
-- total ratings.
-- recent positive comments.
-- services.
-- governorate and district names.
-- availability status for display only.
+Completed response fields in `GET /api/technicians/top`:
+- `profile_photo_url`: public technician profile image URL.
+- `services`: service IDs and names for the technician.
+- `avg_rating`: global average rating.
+- `total_ratings`: global rating count.
+- `area_avg_rating`: area-specific average rating when area-linked ratings exist.
+- `area_total_ratings`: area-specific rating count.
+- `positive_comment_count`: count used for ranking.
+- `positive_comments`: latest positive comments.
+- `positive_comments_scope`: `area` when comments are area-specific, otherwise `global`.
+- `governorate_name` and `district_name`.
+- `availability_status` for display only.
+
+Validation:
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `GET /api/technicians/top?service_id=...` includes:
+  - `profile_photo_url`
+  - `services`
+  - `positive_comments`
+  - `positive_comments_scope`
+
+Remaining:
+- Continue with Task 9.
 
 ### Task 8 - Keep nearby matching separate
-Status: Pending.
+Status: Done.
 
 Goal:
 - Avoid mixing browsing behavior with immediate assignment behavior.
 
-Expected updates:
+Completed:
 - Keep `/api/technicians/nearby` focused on available technicians with fresh location.
 - Add `profile_photo_url` to `/api/technicians/nearby` for UI consistency.
 - Do not remove location freshness checks from request assignment.
+- Did not change availability, distance, work-hours, active-request, or freshness filters.
+
+Validation:
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `profile_photo_url` is present in the nearby response builder.
+- Verify `GET /api/technicians/nearby` still returns `200` with the current strict filters.
+
+Remaining:
+- The top-technicians by area plan is complete.
 
 ### Task 9 - Document frontend integration
-Status: Pending.
+Status: Done.
 
 Goal:
 - Update frontend-facing API notes after implementation.
 
-Expected documentation:
+Completed:
 - Explain the difference between:
   - `/api/technicians/top` for browsing rated technicians.
   - `/api/technicians/nearby` for live nearby matching.
 - Add request/response examples.
 - Add frontend form requirements for governorate and district selection.
+- Document location selector endpoints.
+- Document customer area fields.
+- Document technician primary area and service-area endpoints.
+- Document request area context and area-linked ratings.
+- Document the required deployment migrations and seed command.
+
+Validation:
+- README contains frontend integration notes for the full area workflow.
+- README contains examples for `/api/locations`, `/api/technicians/top`, `/api/technicians/nearby`, and `POST /api/requests/`.
+
+Remaining:
+- Add API-level automated tests for the new area and top-technician flows.
+
+---
+
+## 15. Technician Custom Service Review Plan
+This plan tracks the workflow for technicians who offer a service that is not yet available in the official `services` list.
+
+### Product behavior
+- The technician can choose `أخرى` when their service is not listed.
+- The technician writes the service name they provide.
+- The service name written by the technician does not appear to customers immediately.
+- The technician waits for admin review during the normal document/account approval flow.
+- The admin reviews the requested service name before approving or rejecting it.
+- The admin can rewrite the service into a cleaner official name, link it to an existing service, or reject it.
+- Only approved official services are linked to the technician and shown to customers.
+
+### Why this flow is needed
+- Technicians may write unclear, duplicated, or unprofessional service names.
+- Admin review keeps the service catalog clean.
+- Multiple technician requests can be normalized into one official service.
+- Customer-facing categories stay consistent and searchable.
+
+### Proposed data model
+Add a review table:
+
+```text
+technician_service_requests
+- id
+- technician_id
+- requested_name
+- status: pending / approved / rejected
+- approved_service_id
+- admin_note
+- created_at
+- reviewed_at
+```
+
+Recommended behavior:
+- `requested_name` stores the raw name entered by the technician.
+- `approved_service_id` points to the official service selected or created by the admin.
+- `status = pending` means the admin has not reviewed it yet.
+- `status = approved` means the technician was linked to an official service.
+- `status = rejected` means the requested service will not be used.
+
+### Admin review options
+When reviewing a technician, the admin should be able to:
+- link the request to an existing official service.
+- create a new official service with a clean name, then link the technician to it.
+- reject the request with a note.
+
+Example:
+- Technician writes: `تصليح ابواب زجاج`
+- Admin approves official service as: `تركيب وصيانة أبواب زجاج`
+- Backend creates or selects that official service.
+- Backend links the technician to the official service through `technician_services`.
+
+### Approval rule recommendation
+Before setting a technician to `approved`:
+- if the technician has pending custom service requests, the admin should review them first.
+- after review, rejected requests do not block approval.
+- approved requests link the technician to official services.
+
+This prevents a technician from being approved while their main custom service is still unresolved.
+
+### Task 10 - Document the custom service review plan
+Status: Done.
+
+Completed:
+- Added this plan to define the custom-service workflow before changing code.
+- Clarified that technician-entered service names remain hidden from customers until admin approval.
+- Clarified admin options for linking, creating, or rejecting service requests.
+
+Remaining:
+- Continue with Task 12.
+
+### Task 11 - Add technician service request table
+Status: Done.
+
+Goal:
+- Store custom service names requested by technicians.
+
+Completed:
+- Add `TechnicianServiceRequest` model.
+- Add `migrate_v13_technician_service_requests.py`.
+- Add statuses:
+  - `pending`
+  - `approved`
+  - `rejected`
+- Add relation to `technicians`.
+- Add optional relation to approved `services`.
+- Add table `technician_service_requests` with:
+  - `technician_id`
+  - `requested_name`
+  - `status`
+  - `approved_service_id`
+  - `admin_note`
+  - `created_at`
+  - `reviewed_at`
+
+Validation:
+- Run `python migrate_v13_technician_service_requests.py` successfully.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify the model is available from `app.models`.
+- Existing technicians and services are unaffected.
+
+Remaining:
+- Task 12 still needs to allow technician registration to create pending custom service requests.
+
+### Task 12 - Allow technician registration with custom service name
+Status: Done.
+
+Goal:
+- Let technicians submit a service name when their service is not listed.
+
+Completed:
+- Add optional `custom_service_name` to technician registration schema.
+- Add `other_service_name` as a compatibility alias.
+- Trim and validate the custom service name.
+- If the technician sends a custom service name, create a `pending` `TechnicianServiceRequest`.
+- The custom service is not added to `services`.
+- The custom service is not linked through `technician_services`.
+- The custom service remains hidden from customers until admin review in later tasks.
+
+Validation:
+- Registration works without a custom service.
+- Registration with a custom service creates a pending service request.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify `TechnicianCreate` accepts and normalizes custom service names.
+- Verify conflicting `custom_service_name` and `other_service_name` are rejected.
+- Verify `POST /api/auth/register/technician` creates a pending service request in a rolled-back transactional API check.
+
+Remaining:
+- Task 13 still needs to expose custom service requests to admins.
+
+### Task 13 - Show custom service requests to admins
+Status: Pending.
+
+Goal:
+- Make admin review screens aware of pending custom service requests.
+
+Expected changes:
+- Include custom service requests in admin technician detail/list response.
+- Show:
+  - requested name.
+  - status.
+  - admin note.
+  - approved service if reviewed.
+
+Validation:
+- Admin can see pending custom service requests for technicians.
+
+### Task 14 - Add admin decision endpoints
+Status: Pending.
+
+Goal:
+- Let admins approve, normalize, or reject custom service requests.
+
+Expected endpoints:
+- approve by linking to existing service.
+- approve by creating a new official service name.
+- reject with admin note.
+
+Expected behavior:
+- On approval, create `technician_services` link.
+- On rejection, do not link the technician to any service.
+- Service names shown to customers come from official `services`, not raw technician text.
+
+Validation:
+- Approving links the technician to the official service.
+- Rejecting keeps the request rejected and does not create a service link.
+
+### Task 15 - Connect technician approval with custom service review
+Status: Pending.
+
+Goal:
+- Keep technician approval consistent with pending custom service requests.
+
+Expected behavior:
+- If a technician has pending custom service requests, admin approval should either:
+  - block until the requests are reviewed, or
+  - require a deliberate override.
+- Recommended first version: block technician approval until all custom service requests are approved or rejected.
+
+Validation:
+- Technician with unresolved custom service requests cannot be approved accidentally.
+
+### Task 16 - Document frontend integration
+Status: Pending.
+
+Goal:
+- Document how frontend and admin UI should handle custom technician services.
+
+Expected documentation:
+- Technician registration payload.
+- Admin review UI states.
+- Admin approve/reject actions.
+- Customer-facing behavior after approval.
+
+Validation:
+- README includes request/response examples for the custom service review flow.

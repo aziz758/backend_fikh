@@ -13,9 +13,11 @@ class Rating(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    request_id = Column(Integer, ForeignKey("requests.id"), nullable=True, unique=True, index=True)
     score = Column(Float, nullable=False)  # Rating score
     comment = Column(Text, nullable=True)  # Optional comment
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     customer = relationship("Customer", back_populates="ratings")
     technician = relationship("Technician", back_populates="ratings")
+    request = relationship("Request", back_populates="ratings")

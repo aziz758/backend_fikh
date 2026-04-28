@@ -18,6 +18,8 @@ class Request(Base):
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
     address = Column(String(255), nullable=True)
+    governorate_id = Column(Integer, ForeignKey("governorates.id"), nullable=True, index=True)
+    district_id = Column(Integer, ForeignKey("districts.id"), nullable=True, index=True)
 
     # Assigned technician and final technician report.
     assigned_technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=True)
@@ -34,7 +36,10 @@ class Request(Base):
     customer = relationship("Customer", back_populates="requests")
     request_services = relationship("RequestService", back_populates="request")
     reviews = relationship("Review", back_populates="request")
+    ratings = relationship("Rating", back_populates="request")
     assigned_technician = relationship("Technician")
+    governorate = relationship("Governorate")
+    district = relationship("District")
 
 
 class RequestService(Base):

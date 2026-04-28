@@ -14,6 +14,8 @@ class RequestCreate(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     address: Optional[str] = None
+    governorate_id: Optional[int] = Field(default=None, gt=0)
+    district_id: Optional[int] = Field(default=None, gt=0)
 
 
 class RequestComplete(BaseModel):
@@ -56,6 +58,10 @@ class RequestResponse(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     address: Optional[str] = None
+    governorate_id: Optional[int] = None
+    governorate_name: Optional[str] = None
+    district_id: Optional[int] = None
+    district_name: Optional[str] = None
 
     assigned_technician_id: Optional[int] = None
     assigned_technician_name: Optional[str] = None

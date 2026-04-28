@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Enum
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -16,7 +16,12 @@ class Customer(Base):
     fcm_token = Column(String(255), nullable=True)
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
+    governorate_id = Column(Integer, ForeignKey("governorates.id"), nullable=True, index=True)
+    district_id = Column(Integer, ForeignKey("districts.id"), nullable=True, index=True)
+    address_details = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     requests = relationship("Request", back_populates="customer")
     ratings = relationship("Rating", back_populates="customer")
+    governorate = relationship("Governorate")
+    district = relationship("District")

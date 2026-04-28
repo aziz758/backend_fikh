@@ -11,7 +11,7 @@ from app.api.dependencies import (
     require_technician,
 )
 from app.database import SessionLocal, get_db
-from app.models import Rating, Request as RequestModel, RequestService, Service, Technician
+from app.models import Customer, Rating, Request as RequestModel, RequestService, Service, Technician
 from app.models.request_assignment import RequestAssignment
 from app.schemas.request_schema import (
     RequestCancel,
@@ -27,6 +27,7 @@ from app.services.location_service import (
     is_technician_location_fresh,
     sync_technician_availability_with_location,
 )
+from app.services.location_validation_service import validate_area_selection
 from app.services.request_state_machine import (
     InvalidRequestStatusTransition,
     apply_request_status_transition,
@@ -163,6 +164,38 @@ def _build_navigation_links(lat: float | None, lng: float | None) -> dict[str, s
     }
 
 
+def _resolve_request_area(
+    db: Session,
+    customer_id: int,
+    request_data: RequestCreate,
+) -> tuple[int | None, int | None]:
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    provided_fields = request_data.model_fields_set
+    area_was_provided = bool({"governorate_id", "district_id"} & provided_fields)
+
+    if area_was_provided:
+        governorate_id = (
+            request_data.governorate_id
+            if "governorate_id" in provided_fields
+            else getattr(customer, "governorate_id", None)
+        )
+        district_id = (
+            request_data.district_id
+            if "district_id" in provided_fields
+            else None
+        )
+    else:
+        governorate_id = getattr(customer, "governorate_id", None)
+        district_id = getattr(customer, "district_id", None)
+
+    validate_area_selection(
+        db,
+        governorate_id=governorate_id,
+        district_id=district_id,
+    )
+    return governorate_id, district_id
+
+
 def build_request_response(request: RequestModel, db: Session) -> dict:
     request_services = (
         db.query(RequestService, Service.name)
@@ -210,6 +243,10 @@ def build_request_response(request: RequestModel, db: Session) -> dict:
         "lat": request.lat,
         "lng": request.lng,
         "address": request.address,
+        "governorate_id": request.governorate_id,
+        "governorate_name": request.governorate.name_ar if request.governorate else None,
+        "district_id": request.district_id,
+        "district_name": request.district.name_ar if request.district else None,
         "created_at": str(request.created_at) if request.created_at else None,
         "customer_id": request.customer_id,
         "assigned_technician_id": request.assigned_technician_id,
@@ -374,6 +411,7 @@ def create_request(
 ):
     _reject_legacy_wrapped_query_param(raw_request)
     request_data = body
+    governorate_id, district_id = _resolve_request_area(db, customer_id, request_data)
 
     new_request = RequestModel(
         customer_id=customer_id,
@@ -382,6 +420,8 @@ def create_request(
         lat=request_data.lat,
         lng=request_data.lng,
         address=request_data.address,
+        governorate_id=governorate_id,
+        district_id=district_id,
     )
     db.add(new_request)
     db.commit()
@@ -975,6 +1015,7 @@ def rate_request(
             Rating(
                 customer_id=customer_id,
                 technician_id=request.assigned_technician_id,
+                request_id=request.id,
                 score=rating_value,
                 comment=request.rating_comment,
             )

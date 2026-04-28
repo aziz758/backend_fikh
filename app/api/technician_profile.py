@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
 from app.database import get_db
-from app.models import Request as RequestModel
+from app.models import Request as RequestModel, TechnicianServiceArea
 from app.models.technician import Technician
 from app.schemas.technician_profile import (
+    TechnicianAreaUpdateRequest,
     TechnicianAvailabilityUpdateRequest,
     TechnicianAvailabilityUpdateResponse,
     TechnicianDocumentsUploadResponse,
@@ -15,9 +16,12 @@ from app.schemas.technician_profile import (
     TechnicianLocationUpdateResponse,
     TechnicianProfileResponse,
     TechnicianProfileStatusResponse,
+    TechnicianServiceAreaResponse,
+    TechnicianServiceAreasUpdateRequest,
     TechnicianWorkSettingsUpdateRequest,
     TechnicianWorkSettingsUpdateResponse,
 )
+from app.services.location_validation_service import validate_area_selection, validate_service_area_inputs
 from app.services.location_service import (
     is_technician_location_fresh,
     sync_technician_availability_with_location,
@@ -59,6 +63,11 @@ def _serialize_technician_profile(tech: Technician) -> TechnicianProfileResponse
         availability_status=tech.availability_status,
         lat=tech.lat,
         lng=tech.lng,
+        governorate_id=tech.governorate_id,
+        governorate_name=tech.governorate.name_ar if tech.governorate else None,
+        district_id=tech.district_id,
+        district_name=tech.district.name_ar if tech.district else None,
+        address_details=tech.address_details,
         location_updated_at=tech.location_updated_at,
         service_radius_km=float(tech.service_radius_km) if tech.service_radius_km is not None else None,
         work_start_time=tech.work_start_time,
@@ -71,6 +80,31 @@ def _serialize_technician_profile(tech: Technician) -> TechnicianProfileResponse
         profile_photo_url=public_upload_url(tech.profile_photo_url),
         id_card_photo_url=ID_CARD_DOCUMENT_URL if tech.id_card_photo_url else None,
     )
+
+
+def _serialize_service_area(area: TechnicianServiceArea) -> TechnicianServiceAreaResponse:
+    return TechnicianServiceAreaResponse(
+        id=area.id,
+        governorate_id=area.governorate_id,
+        governorate_name=area.governorate.name_ar if area.governorate else None,
+        district_id=area.district_id,
+        district_name=area.district.name_ar if area.district else None,
+        scope="district" if area.district_id is not None else "governorate",
+    )
+
+
+def _list_service_areas_for_technician(db: Session, technician_id: int) -> list[TechnicianServiceAreaResponse]:
+    rows = (
+        db.query(TechnicianServiceArea)
+        .filter(TechnicianServiceArea.technician_id == technician_id)
+        .order_by(
+            TechnicianServiceArea.governorate_id.asc(),
+            TechnicianServiceArea.district_id.asc(),
+            TechnicianServiceArea.id.asc(),
+        )
+        .all()
+    )
+    return [_serialize_service_area(row) for row in rows]
 
 
 def _sync_availability_and_commit_if_changed(db: Session, tech: Technician) -> None:
@@ -113,6 +147,68 @@ def _update_location_for_current_technician(
         sync_request_tracking_realtime(active_request, tech)
 
     return tech
+
+
+def _update_area_for_current_technician(
+    body: TechnicianAreaUpdateRequest,
+    current_user,
+    db: Session,
+) -> Technician:
+    tech = _get_current_technician(current_user, db)
+    provided_fields = body.model_fields_set
+    if not provided_fields:
+        raise HTTPException(status_code=400, detail="At least one field is required")
+
+    if {"governorate_id", "district_id"} & provided_fields:
+        governorate_id = (
+            body.governorate_id
+            if "governorate_id" in provided_fields
+            else tech.governorate_id
+        )
+        district_id = (
+            body.district_id
+            if "district_id" in provided_fields
+            else tech.district_id
+        )
+        validate_area_selection(
+            db,
+            governorate_id=governorate_id,
+            district_id=district_id,
+        )
+        tech.governorate_id = governorate_id
+        tech.district_id = district_id
+
+    if "address_details" in provided_fields:
+        tech.address_details = body.address_details
+
+    db.commit()
+    db.refresh(tech)
+    return tech
+
+
+def _replace_service_areas_for_current_technician(
+    body: TechnicianServiceAreasUpdateRequest,
+    current_user,
+    db: Session,
+) -> list[TechnicianServiceAreaResponse]:
+    tech = _get_current_technician(current_user, db)
+    validate_service_area_inputs(db, body.service_areas)
+
+    db.query(TechnicianServiceArea).filter(
+        TechnicianServiceArea.technician_id == tech.id,
+    ).delete(synchronize_session=False)
+
+    for area in body.service_areas:
+        db.add(
+            TechnicianServiceArea(
+                technician_id=tech.id,
+                governorate_id=area.governorate_id,
+                district_id=area.district_id,
+            )
+        )
+
+    db.commit()
+    return _list_service_areas_for_technician(db, tech.id)
 
 
 def _update_availability_for_current_technician(
@@ -285,6 +381,100 @@ def update_location_alias(
         "location_updated_at": tech.location_updated_at,
         "availability_status": tech.availability_status,
     }
+
+
+@router.put("/area", response_model=TechnicianProfileResponse)
+@router.put("/area/", response_model=TechnicianProfileResponse, include_in_schema=False)
+def update_area(
+    body: TechnicianAreaUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tech = _update_area_for_current_technician(body, current_user, db)
+    return _serialize_technician_profile(tech)
+
+
+@profile_alias_router.put(
+    "/area",
+    response_model=TechnicianProfileResponse,
+    include_in_schema=False,
+)
+@profile_alias_router.put(
+    "/area/",
+    response_model=TechnicianProfileResponse,
+    include_in_schema=False,
+)
+def update_area_alias(
+    body: TechnicianAreaUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tech = _update_area_for_current_technician(body, current_user, db)
+    return _serialize_technician_profile(tech)
+
+
+@router.get("/service-areas", response_model=list[TechnicianServiceAreaResponse])
+@router.get(
+    "/service-areas/",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+def list_service_areas(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tech = _get_current_technician(current_user, db)
+    return _list_service_areas_for_technician(db, tech.id)
+
+
+@router.put("/service-areas", response_model=list[TechnicianServiceAreaResponse])
+@router.put(
+    "/service-areas/",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+def replace_service_areas(
+    body: TechnicianServiceAreasUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _replace_service_areas_for_current_technician(body, current_user, db)
+
+
+@profile_alias_router.get(
+    "/service-areas",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+@profile_alias_router.get(
+    "/service-areas/",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+def list_service_areas_alias(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tech = _get_current_technician(current_user, db)
+    return _list_service_areas_for_technician(db, tech.id)
+
+
+@profile_alias_router.put(
+    "/service-areas",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+@profile_alias_router.put(
+    "/service-areas/",
+    response_model=list[TechnicianServiceAreaResponse],
+    include_in_schema=False,
+)
+def replace_service_areas_alias(
+    body: TechnicianServiceAreasUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _replace_service_areas_for_current_technician(body, current_user, db)
 
 
 @router.put("/availability", response_model=TechnicianAvailabilityUpdateResponse)
