@@ -186,6 +186,9 @@ Profile API note:
 ### Admin (`/api/admin`)
 - `GET /statistics`
 - `GET /technicians`
+- `GET /technicians/{technician_id}`
+- `PUT /custom-service-requests/{service_request_id}/approve`
+- `PUT /custom-service-requests/{service_request_id}/reject`
 - `PUT /technicians/{technician_id}/status`
 - `GET /requests`
 - `GET /ratings`
@@ -565,6 +568,136 @@ Customer area fields are optional during rollout, but if `district_id` is sent t
 ```
 
 `custom_service_name` is optional. If sent, it creates a pending admin-review request and does not appear to customers until the admin approves and links it to an official service.
+
+### Custom technician services
+This section covers the frontend flow for the technician `أخرى` option.
+
+Technician registration UI:
+- Show `أخرى` as a frontend-only option when the technician cannot find their service.
+- Do not send `أخرى` as a `service_id`.
+- If the technician selects `أخرى`, show a required text input for the custom service name.
+- Send the entered value as `custom_service_name`.
+- `other_service_name` is accepted as a compatibility alias, but new frontend code should use `custom_service_name`.
+
+Registration payload with an official service and a custom service request:
+```json
+{
+  "name": "Technician Name",
+  "phone": "0501234567",
+  "password": "secret123",
+  "registration_token": "...",
+  "service_ids": [1],
+  "custom_service_name": "تصليح ابواب زجاج"
+}
+```
+
+Important customer-facing rule:
+- The raw `custom_service_name` is hidden from customers.
+- It is not added to `services`.
+- It is not linked to the technician until admin review.
+- After admin approval, customers only see the official service name from `services`.
+
+Admin technician review data:
+- `GET /api/admin/technicians`
+- `GET /api/admin/technicians/{technician_id}`
+- `GET /api/admin/dashboard`
+
+Admin technician responses include:
+```json
+{
+  "id": 10,
+  "name": "Technician Name",
+  "status": "pending_approval",
+  "services": ["Electrician"],
+  "pending_custom_service_requests_count": 1,
+  "custom_service_requests": [
+    {
+      "id": 7,
+      "requested_name": "تصليح ابواب زجاج",
+      "status": "pending",
+      "approved_service_id": null,
+      "approved_service_name": "",
+      "admin_note": "",
+      "created_at": "2026-04-30 10:00:00",
+      "reviewed_at": ""
+    }
+  ]
+}
+```
+
+Recommended admin UI states:
+- `pending`: show approve/reject actions.
+- `approved`: show the official approved service name and disable review actions.
+- `rejected`: show the rejection note and disable review actions.
+- If `pending_custom_service_requests_count > 0`, show a visible review-required state before the account approval button.
+
+Approve by linking to an existing official service:
+```http
+PUT /api/admin/custom-service-requests/7/approve
+```
+
+```json
+{
+  "service_id": 1,
+  "admin_note": "Linked to existing electrician service"
+}
+```
+
+Approve by creating or reusing a cleaner official service name:
+```http
+PUT /api/admin/custom-service-requests/7/approve
+```
+
+```json
+{
+  "service_name": "تركيب وصيانة أبواب زجاج",
+  "admin_note": "Normalized technician wording"
+}
+```
+
+Reject:
+```http
+PUT /api/admin/custom-service-requests/7/reject
+```
+
+```json
+{
+  "admin_note": "Service is not supported right now"
+}
+```
+
+Review response shape:
+```json
+{
+  "id": 7,
+  "requested_name": "تصليح ابواب زجاج",
+  "status": "approved",
+  "approved_service_id": 12,
+  "approved_service_name": "تركيب وصيانة أبواب زجاج",
+  "admin_note": "Normalized technician wording",
+  "created_at": "2026-04-30 10:00:00",
+  "reviewed_at": "2026-04-30 10:05:00"
+}
+```
+
+Technician account approval gate:
+- `PUT /api/admin/technicians/{technician_id}/status` with `status = approved` returns `400` if the technician still has pending custom service requests.
+- The frontend should handle this as a review-required error, not a generic failure.
+
+Error response:
+```json
+{
+  "detail": "Review pending custom service requests before approving technician"
+}
+```
+
+Recommended frontend sequence for admin approval:
+- Open technician review details.
+- Review all `custom_service_requests` with `status = pending`.
+- Approve each one by selecting an existing service or entering a clean official service name.
+- Reject unsupported services with a clear note.
+- Refresh the technician detail.
+- Approve the technician account only after `pending_custom_service_requests_count` is `0`.
 
 Error handling:
 - Invalid or expired registration token returns `400`.
@@ -1398,71 +1531,133 @@ Validation:
 - Verify `POST /api/auth/register/technician` creates a pending service request in a rolled-back transactional API check.
 
 Remaining:
-- Task 13 still needs to expose custom service requests to admins.
+- Task 14 still needs to add admin approve/reject actions for custom service requests.
 
 ### Task 13 - Show custom service requests to admins
-Status: Pending.
+Status: Done.
 
 Goal:
 - Make admin review screens aware of pending custom service requests.
 
-Expected changes:
-- Include custom service requests in admin technician detail/list response.
-- Show:
-  - requested name.
-  - status.
-  - admin note.
-  - approved service if reviewed.
+Completed:
+- Include custom service requests in `GET /api/admin/technicians`.
+- Include custom service requests in `GET /api/admin/dashboard` pending technician cards.
+- Add admin technician detail endpoint:
+  - `GET /api/admin/technicians/{technician_id}`
+- Add `pending_custom_service_requests_count` to admin technician responses.
+- Each custom service request includes:
+  - `id`
+  - `requested_name`
+  - `status`
+  - `approved_service_id`
+  - `approved_service_name`
+  - `admin_note`
+  - `created_at`
+  - `reviewed_at`
 
 Validation:
-- Admin can see pending custom service requests for technicians.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify admin technician list, technician detail, and dashboard responses include pending custom service requests in a rolled-back transactional API check.
+
+Remaining:
+- Task 15 still needs to connect technician account approval with unresolved custom service requests.
 
 ### Task 14 - Add admin decision endpoints
-Status: Pending.
+Status: Done.
 
 Goal:
 - Let admins approve, normalize, or reject custom service requests.
 
-Expected endpoints:
-- approve by linking to existing service.
-- approve by creating a new official service name.
-- reject with admin note.
+Completed endpoints:
+- `PUT /api/admin/custom-service-requests/{service_request_id}/approve`
+- `PUT /api/admin/custom-service-requests/{service_request_id}/reject`
 
-Expected behavior:
-- On approval, create `technician_services` link.
-- On rejection, do not link the technician to any service.
-- Service names shown to customers come from official `services`, not raw technician text.
+Approve by linking to an existing official service:
+```json
+{
+  "service_id": 1,
+  "admin_note": "Linked to existing electrician service"
+}
+```
+
+Approve by creating or reusing a clean official service name:
+```json
+{
+  "service_name": "تركيب وصيانة أبواب زجاج",
+  "admin_note": "Normalized technician wording"
+}
+```
+
+Reject:
+```json
+{
+  "admin_note": "Service is not supported right now"
+}
+```
+
+Completed behavior:
+- Approval requires exactly one of `service_id` or `service_name`.
+- If `service_id` is sent, the backend links the technician to that official service.
+- If `service_name` is sent, the backend reuses an existing matching service name or creates a new official service.
+- Approval creates the `technician_services` link only if it does not already exist.
+- Approval updates the custom request to `status = approved`, stores `approved_service_id`, `admin_note`, and `reviewed_at`.
+- Rejection updates the custom request to `status = rejected`, stores `admin_note` and `reviewed_at`, and does not create a service link.
+- Already reviewed custom service requests cannot be reviewed again.
+- Customer-facing service names still come from official `services`, not raw technician text.
 
 Validation:
-- Approving links the technician to the official service.
-- Rejecting keeps the request rejected and does not create a service link.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify approving with an existing service links the technician through `technician_services`.
+- Verify approving with a new service name creates/reuses an official `services` row and links the technician.
+- Verify rejecting keeps the request rejected and does not create a service link.
+- Verify an already reviewed request returns `400`.
+
+Remaining:
+- Add API-level automated tests for the full custom service review flow.
 
 ### Task 15 - Connect technician approval with custom service review
-Status: Pending.
+Status: Done.
 
 Goal:
 - Keep technician approval consistent with pending custom service requests.
 
-Expected behavior:
-- If a technician has pending custom service requests, admin approval should either:
-  - block until the requests are reviewed, or
-  - require a deliberate override.
-- Recommended first version: block technician approval until all custom service requests are approved or rejected.
+Completed behavior:
+- `PUT /api/admin/technicians/{technician_id}/status` now blocks `status = approved` when the technician has pending custom service requests.
+- The backend returns `400` with:
+  - `Review pending custom service requests before approving technician`
+- Approved or rejected custom service requests do not block technician approval.
+- Other technician status changes, such as `rejected`, `pending_approval`, or `pending_documents`, are not blocked by pending custom service requests.
 
 Validation:
-- Technician with unresolved custom service requests cannot be approved accidentally.
+- Import the FastAPI app successfully.
+- Parse all Python files successfully.
+- Verify a technician with a pending custom service request cannot be approved.
+- Verify the same technician can be approved after the custom service request is approved or rejected.
+
+Remaining:
+- Add API-level automated tests for the full custom service review flow.
 
 ### Task 16 - Document frontend integration
-Status: Pending.
+Status: Done.
 
 Goal:
 - Document how frontend and admin UI should handle custom technician services.
 
-Expected documentation:
-- Technician registration payload.
-- Admin review UI states.
-- Admin approve/reject actions.
+Completed documentation:
+- Technician registration payload with `custom_service_name`.
+- How the frontend should handle the `أخرى` option.
+- Admin review UI states for `pending`, `approved`, and `rejected` custom service requests.
+- Admin approve/reject API actions.
+- Approval with existing official service.
+- Approval with a clean new official service name.
+- Rejection with admin note.
+- Technician account approval gate when custom service requests are still pending.
 - Customer-facing behavior after approval.
 
 Validation:
 - README includes request/response examples for the custom service review flow.
+
+Remaining:
+- Add API-level automated tests for the full custom service review flow.

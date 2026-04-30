@@ -1,14 +1,27 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 from sqlalchemy import func, literal, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import get_current_user
 from app.database import get_db
-from app.models import Customer, Request, RequestService, Service, Technician, TechnicianService
+from app.models import (
+    Customer,
+    Request,
+    RequestService,
+    Service,
+    Technician,
+    TechnicianService,
+    TechnicianServiceRequest,
+)
 from app.models.request_assignment import RequestAssignment
 from app.schemas.admin import (
     BroadcastNotificationRequest,
     BroadcastNotificationResponse,
+    TechnicianServiceRequestApproveRequest,
+    TechnicianServiceRequestRejectRequest,
     TechnicianStatusUpdateRequest,
 )
 from app.schemas.common import SuccessResponse
@@ -94,8 +107,117 @@ def _get_technician_services_map(db: Session, technician_ids: list[int]) -> dict
     return services_map
 
 
-def _serialize_technician(tech: Technician, services_map: dict[int, list[str]]) -> dict:
+def _serialize_service_request(request: TechnicianServiceRequest) -> dict:
+    approved_service = request.approved_service
+    return {
+        "id": request.id,
+        "requested_name": request.requested_name or "",
+        "status": request.status or "",
+        "approved_service_id": request.approved_service_id,
+        "approved_service_name": approved_service.name if approved_service else "",
+        "admin_note": request.admin_note or "",
+        "created_at": str(request.created_at) if request.created_at else "",
+        "reviewed_at": str(request.reviewed_at) if request.reviewed_at else "",
+    }
+
+
+def _normalize_service_name(name: str) -> str:
+    return " ".join(name.split())
+
+
+def _get_pending_service_request(db: Session, service_request_id: int) -> TechnicianServiceRequest:
+    service_request = (
+        db.query(TechnicianServiceRequest)
+        .options(joinedload(TechnicianServiceRequest.approved_service))
+        .filter(TechnicianServiceRequest.id == service_request_id)
+        .first()
+    )
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Custom service request not found")
+    if service_request.status != "pending":
+        raise HTTPException(status_code=400, detail="Custom service request is already reviewed")
+    return service_request
+
+
+def _get_or_create_official_service(db: Session, name: str) -> Service:
+    normalized_name = _normalize_service_name(name)
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="service_name is required")
+
+    service = (
+        db.query(Service)
+        .filter(func.lower(func.trim(Service.name)) == normalized_name.lower())
+        .first()
+    )
+    if service:
+        return service
+
+    service = Service(name=normalized_name)
+    db.add(service)
+    db.flush()
+    return service
+
+
+def _ensure_technician_service_link(db: Session, technician_id: int, service_id: int) -> None:
+    existing_link = (
+        db.query(TechnicianService)
+        .filter(
+            TechnicianService.technician_id == technician_id,
+            TechnicianService.service_id == service_id,
+        )
+        .first()
+    )
+    if not existing_link:
+        db.add(TechnicianService(technician_id=technician_id, service_id=service_id))
+
+
+def _count_pending_custom_service_requests(db: Session, technician_id: int) -> int:
+    pending_count = (
+        db.query(func.count(TechnicianServiceRequest.id))
+        .filter(
+            TechnicianServiceRequest.technician_id == technician_id,
+            TechnicianServiceRequest.status == "pending",
+        )
+        .scalar()
+        or 0
+    )
+    return int(pending_count)
+
+
+def _get_technician_service_requests_map(
+    db: Session,
+    technician_ids: list[int],
+) -> dict[int, list[dict]]:
+    if not technician_ids:
+        return {}
+
+    rows = (
+        db.query(TechnicianServiceRequest)
+        .options(joinedload(TechnicianServiceRequest.approved_service))
+        .filter(TechnicianServiceRequest.technician_id.in_(technician_ids))
+        .order_by(
+            TechnicianServiceRequest.technician_id.asc(),
+            TechnicianServiceRequest.created_at.desc(),
+            TechnicianServiceRequest.id.desc(),
+        )
+        .all()
+    )
+    requests_map: dict[int, list[dict]] = {}
+    for request in rows:
+        requests_map.setdefault(request.technician_id, []).append(_serialize_service_request(request))
+    return requests_map
+
+
+def _serialize_technician(
+    tech: Technician,
+    services_map: dict[int, list[str]],
+    service_requests_map: dict[int, list[dict]] | None = None,
+) -> dict:
     id_card_document_url = f"/api/admin/technicians/{tech.id}/documents/id-card" if tech.id_card_photo_url else ""
+    service_requests = (service_requests_map or {}).get(tech.id, [])
+    pending_service_requests_count = sum(
+        1 for request in service_requests if request.get("status") == "pending"
+    )
     return {
         "id": tech.id,
         "name": tech.name or "",
@@ -113,6 +235,8 @@ def _serialize_technician(tech: Technician, services_map: dict[int, list[str]]) 
         "work_end_time": tech.work_end_time or "",
         "work_days": sorted(parse_work_days(tech.work_days)),
         "services": services_map.get(tech.id, []),
+        "custom_service_requests": service_requests,
+        "pending_custom_service_requests_count": pending_service_requests_count,
         "created_at": str(tech.created_at) if tech.created_at else "",
     }
 
@@ -249,12 +373,80 @@ def list_technicians_for_admin(
         .all()
     )
     services_map = _get_technician_services_map(db, [t.id for t in technicians])
+    service_requests_map = _get_technician_service_requests_map(db, [t.id for t in technicians])
 
     return {
-        "results": [_serialize_technician(t, services_map) for t in technicians],
+        "results": [
+            _serialize_technician(t, services_map, service_requests_map)
+            for t in technicians
+        ],
         "total": total,
         "page": page,
     }
+
+
+@router.get("/technicians/{technician_id}")
+def get_technician_for_admin(
+    technician_id: int,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    technician = db.query(Technician).filter(Technician.id == technician_id).first()
+    if not technician:
+        raise HTTPException(status_code=404, detail="Technician not found")
+
+    services_map = _get_technician_services_map(db, [technician.id])
+    service_requests_map = _get_technician_service_requests_map(db, [technician.id])
+    return _serialize_technician(technician, services_map, service_requests_map)
+
+
+@router.put("/custom-service-requests/{service_request_id}/approve")
+def approve_custom_service_request(
+    service_request_id: int,
+    body: TechnicianServiceRequestApproveRequest,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    service_request = _get_pending_service_request(db, service_request_id)
+
+    if body.service_id is not None:
+        service = db.query(Service).filter(Service.id == body.service_id).first()
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+    else:
+        service = _get_or_create_official_service(db, body.service_name or "")
+
+    _ensure_technician_service_link(
+        db,
+        technician_id=service_request.technician_id,
+        service_id=service.id,
+    )
+    service_request.status = "approved"
+    service_request.approved_service_id = service.id
+    service_request.admin_note = body.admin_note
+    service_request.reviewed_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(service_request)
+    return _serialize_service_request(service_request)
+
+
+@router.put("/custom-service-requests/{service_request_id}/reject")
+def reject_custom_service_request(
+    service_request_id: int,
+    body: TechnicianServiceRequestRejectRequest,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    service_request = _get_pending_service_request(db, service_request_id)
+    service_request.status = "rejected"
+    service_request.approved_service_id = None
+    service_request.admin_note = body.admin_note
+    service_request.reviewed_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(service_request)
+    return _serialize_service_request(service_request)
 
 
 @router.put("/technicians/{technician_id}/status", response_model=SuccessResponse)
@@ -271,6 +463,17 @@ def update_technician_status(
     technician = db.query(Technician).filter(Technician.id == technician_id).first()
     if not technician:
         raise HTTPException(status_code=404, detail="Technician not found")
+
+    if new_status == "approved":
+        pending_custom_service_requests = _count_pending_custom_service_requests(
+            db,
+            technician_id=technician.id,
+        )
+        if pending_custom_service_requests > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Review pending custom service requests before approving technician",
+            )
 
     technician.status = new_status
     if new_status == "approved":
@@ -618,8 +821,12 @@ def get_admin_dashboard(
         db,
         [tech.id for tech in pending_technicians_query],
     )
+    pending_service_requests_map = _get_technician_service_requests_map(
+        db,
+        [tech.id for tech in pending_technicians_query],
+    )
     pending_technicians = [
-        _serialize_technician(tech, pending_services_map)
+        _serialize_technician(tech, pending_services_map, pending_service_requests_map)
         for tech in pending_technicians_query
     ]
 
