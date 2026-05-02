@@ -498,6 +498,9 @@ Validation:
 ## 13. Frontend Integration Notes
 These notes summarize the backend changes that require frontend updates.
 
+Full frontend integration guide:
+- [`docs/frontend-integration.md`](docs/frontend-integration.md)
+
 ### Auth and registration
 `POST /api/auth/send-otp`:
 - No frontend request change.
