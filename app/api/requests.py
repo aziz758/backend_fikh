@@ -78,7 +78,27 @@ async def upload_profile_image(
         )
 
     saved = save_validated_image_upload(file, "uploads", public_prefix="/uploads")
-    return {"image_url": saved.url}
+    user_type = current_user.get("type")
+    user_id = current_user.get("id")
+    if user_type in {"customer", "admin"}:
+        user = db.query(Customer).filter(Customer.id == user_id).first()
+    elif user_type == "technician":
+        user = db.query(Technician).filter(Technician.id == user_id).first()
+    else:
+        user = None
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.profile_photo_url = saved.url
+    db.commit()
+
+    return {
+        "success": True,
+        "profile_photo_url": saved.url,
+        "image_url": saved.url,
+        "url": saved.url,
+    }
 
 
 def _avg_rating(db: Session, technician_id: int) -> float:

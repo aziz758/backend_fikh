@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -76,9 +76,15 @@ def is_technician_within_working_hours(
     try:
         tz = ZoneInfo(settings.TECHNICIAN_WORKING_HOURS_TIMEZONE)
     except Exception:
-        tz = ZoneInfo("UTC")
+        tz = timezone.utc
 
-    current = (now_utc or datetime.utcnow()).replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+    current_utc = now_utc or datetime.utcnow()
+    if current_utc.tzinfo is None:
+        current_utc = current_utc.replace(tzinfo=timezone.utc)
+    else:
+        current_utc = current_utc.astimezone(timezone.utc)
+
+    current = current_utc.astimezone(tz)
     if current.weekday() not in days:
         return False
 

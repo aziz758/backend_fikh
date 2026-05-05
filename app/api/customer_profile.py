@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.customer import Customer
 from app.schemas.customer import CustomerProfileUpdate, CustomerResponse
 from app.services.location_validation_service import validate_area_selection
+from app.services.upload_service import public_upload_url
 
 router = APIRouter()
 
@@ -18,11 +19,15 @@ def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
 
 
 def _serialize_customer_profile(customer: Customer) -> dict:
+    profile_photo_url = public_upload_url(customer.profile_photo_url)
     return {
         "id": customer.id,
         "name": customer.name,
         "phone": customer.phone,
         "status": customer.status,
+        "profile_photo_url": profile_photo_url,
+        "image_url": profile_photo_url,
+        "url": profile_photo_url,
         "lat": customer.lat,
         "lng": customer.lng,
         "governorate_id": customer.governorate_id,
@@ -63,6 +68,8 @@ def update_my_profile(
 
     if "name" in provided_fields and body.name is not None:
         customer.name = body.name.strip()
+    if {"profile_photo_url", "image_url", "url"} & provided_fields:
+        customer.profile_photo_url = body.profile_photo_url or body.image_url or body.url
     if "lat" in provided_fields:
         customer.lat = body.lat
     if "lng" in provided_fields:

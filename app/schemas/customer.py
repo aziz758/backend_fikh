@@ -26,6 +26,9 @@ class CustomerResponse(BaseModel):
     name: str
     phone: str
     status: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    image_url: Optional[str] = None
+    url: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     governorate_id: Optional[int] = None
@@ -46,6 +49,9 @@ class CustomerUpdateLocation(BaseModel):
 
 class CustomerProfileUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    profile_photo_url: Optional[str] = Field(default=None, max_length=500)
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    url: Optional[str] = Field(default=None, max_length=500)
     lat: Optional[float] = Field(default=None, ge=-90, le=90)
     lng: Optional[float] = Field(default=None, ge=-180, le=180)
     governorate_id: Optional[int] = Field(default=None, gt=0)
@@ -65,6 +71,14 @@ class CustomerProfileUpdate(BaseModel):
     @field_validator("address_details")
     @classmethod
     def validate_address_details(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("profile_photo_url", "image_url", "url")
+    @classmethod
+    def validate_profile_photo_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         cleaned = value.strip()

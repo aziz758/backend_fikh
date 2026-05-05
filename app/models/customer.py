@@ -14,6 +14,7 @@ class Customer(Base):
     password_hash = Column(String(255), nullable=False)
     status = Column(String(20), default="active")  # active, inactive
     fcm_token = Column(String(255), nullable=True)
+    profile_photo_url = Column(String(500), nullable=True)
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
     governorate_id = Column(Integer, ForeignKey("governorates.id"), nullable=True, index=True)
