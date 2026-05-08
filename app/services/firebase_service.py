@@ -190,7 +190,6 @@ def notify_user(
     data: dict | None = None,
 ):
     """Send FCM + save notification in DB."""
-    payload = data or {}
     fcm_token = None
 
     if user_type == "customer":
@@ -206,7 +205,15 @@ def notify_user(
         if user:
             fcm_token = getattr(user, "fcm_token", None)
 
+    notif = save_notification(db, user_id, user_type, title, body, type)
+
+    payload = {
+        **(data or {}),
+        "type": type,
+        "notification_id": notif.id,
+        "user_type": user_type,
+    }
     if fcm_token:
         send_push_notification(fcm_token, title, body, payload)
 
-    return save_notification(db, user_id, user_type, title, body, type)
+    return notif
