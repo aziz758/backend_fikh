@@ -92,6 +92,7 @@ Main tables defined by SQLAlchemy models:
 - `technician_services`
 - `technician_service_areas`
 - `technician_service_requests`
+- `service_categories`
 - `services`
 - `requests`
 - `request_services`
@@ -123,6 +124,9 @@ Main tables defined by SQLAlchemy models:
 
 ### Services (`/api/services`)
 - `GET /`
+- `GET /grouped`
+  - returns active services grouped by category for frontend display.
+  - request creation still uses `service_id`; categories are display-only.
 
 ### Locations (`/api/locations`)
 - `GET /governorates`
@@ -264,6 +268,8 @@ python migrate_v10_user_area_fields.py
 python migrate_v11_technician_service_areas.py
 python migrate_v12_request_rating_area_context.py
 python migrate_v13_technician_service_requests.py
+python migrate_v14_customer_profile_photo.py
+python migrate_v15_service_categories.py
 python seed_services.py
 python seed_locations.py
 ```

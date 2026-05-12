@@ -6,7 +6,7 @@ from app.models.technician import (
     TechnicianServiceArea,
     TechnicianServiceRequest,
 )
-from app.models.service import Service
+from app.models.service import Service, ServiceCategory
 from app.models.request import Request, RequestService
 from app.models.review import Review
 from app.models.rating import Rating
@@ -23,6 +23,7 @@ __all__ = [
     "TechnicianServiceArea",
     "TechnicianServiceRequest",
     "Service",
+    "ServiceCategory",
     "Request",
     "RequestService",
     "Review",
