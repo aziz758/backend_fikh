@@ -1,33 +1,57 @@
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app.database import engine
 
 
+def _missing_columns(table_name: str, columns: dict[str, str]) -> list[str]:
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        print(f"{table_name} table does not exist")
+        return []
+
+    existing = {col["name"] for col in inspector.get_columns(table_name)}
+    return [
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+        for column_name, column_type in columns.items()
+        if column_name not in existing
+    ]
+
+
 def migrate():
     with engine.connect() as conn:
-        # customers table
-        try:
-            conn.execute(text("ALTER TABLE customers ADD COLUMN fcm_token VARCHAR(255)"))
-            conn.commit()
-            print("Added fcm_token to customers")
-        except Exception as e:
-            print(f"customers fcm_token: {e}")
+        migrations = []
+        migrations.extend(
+            _missing_columns(
+                "customers",
+                {
+                    "fcm_token": "VARCHAR(255)",
+                },
+            )
+        )
+        migrations.extend(
+            _missing_columns(
+                "technicians",
+                {
+                    "fcm_token": "VARCHAR(255)",
+                    "availability_status": "VARCHAR(20) DEFAULT 'offline'",
+                    "avg_rating": "FLOAT DEFAULT 0.0",
+                    "total_ratings": "INT DEFAULT 0",
+                    "acceptance_rate": "FLOAT DEFAULT 0.0",
+                    "completion_rate": "FLOAT DEFAULT 0.0",
+                    "profile_photo_url": "VARCHAR(500)",
+                    "id_card_photo_url": "VARCHAR(500)",
+                },
+            )
+        )
 
-        # technicians table
-        for col in [
-            "ALTER TABLE technicians ADD COLUMN fcm_token VARCHAR(255)",
-            "ALTER TABLE technicians ADD COLUMN availability_status VARCHAR(20) DEFAULT 'offline'",
-            "ALTER TABLE technicians ADD COLUMN avg_rating FLOAT DEFAULT 0.0",
-            "ALTER TABLE technicians ADD COLUMN total_ratings INT DEFAULT 0",
-            "ALTER TABLE technicians ADD COLUMN acceptance_rate FLOAT DEFAULT 0.0",
-            "ALTER TABLE technicians ADD COLUMN completion_rate FLOAT DEFAULT 0.0",
-            "ALTER TABLE technicians ADD COLUMN profile_photo_url VARCHAR(500)",
-            "ALTER TABLE technicians ADD COLUMN id_card_photo_url VARCHAR(500)",
-        ]:
+        if not migrations:
+            print("customers and technicians already have v3 fields")
+
+        for sql in migrations:
             try:
-                conn.execute(text(col))
+                conn.execute(text(sql))
                 conn.commit()
-                print(f"Done: {col}")
+                print(f"Done: {sql}")
             except Exception as e:
                 print(f"Skip: {e}")
 

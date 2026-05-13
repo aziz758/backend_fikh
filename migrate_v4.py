@@ -1,15 +1,32 @@
-﻿from app.database import engine
-from sqlalchemy import text
+from sqlalchemy import inspect, text
+
+from app.database import engine
 
 
 def migrate():
+    inspector = inspect(engine)
+    if not inspector.has_table("requests"):
+        print("requests table does not exist")
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("requests")}
+    migration_columns = {
+        "rating_comment": "TEXT",
+        "assigned_at": "DATETIME",
+        "accepted_at": "DATETIME",
+        "completed_at": "DATETIME",
+    }
+    migrations = [
+        f"ALTER TABLE requests ADD COLUMN {column_name} {column_type}"
+        for column_name, column_type in migration_columns.items()
+        if column_name not in columns
+    ]
+
+    if not migrations:
+        print("requests already has v4 fields")
+        return
+
     with engine.connect() as conn:
-        migrations = [
-            "ALTER TABLE requests ADD COLUMN rating_comment TEXT",
-            "ALTER TABLE requests ADD COLUMN assigned_at DATETIME",
-            "ALTER TABLE requests ADD COLUMN accepted_at DATETIME",
-            "ALTER TABLE requests ADD COLUMN completed_at DATETIME",
-        ]
         for sql in migrations:
             try:
                 conn.execute(text(sql))

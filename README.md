@@ -255,28 +255,24 @@ Update `.env` values for your database, JWT key, and integrations.
 ### 4) Initialize database and schema
 ```bash
 python init_db.py
-python create_tables.py
-python migrate_requests_v2.py
-python migrate_v3.py
-python migrate_v4.py
-python migrate_v5.py
-python migrate_v6.py
-python migrate_v7.py
-python migrate_v8_otp_hash.py
-python migrate_v9_locations.py
-python migrate_v10_user_area_fields.py
-python migrate_v11_technician_service_areas.py
-python migrate_v12_request_rating_area_context.py
-python migrate_v13_technician_service_requests.py
-python migrate_v14_customer_profile_photo.py
-python migrate_v15_service_categories.py
-python seed_services.py
-python seed_locations.py
+python run_migrations.py --with-seeds
+```
+
+If the database already exists on your hosting provider, you can usually run only:
+
+```bash
+python run_migrations.py --with-seeds
 ```
 
 ### 5) Run server
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Render start command:
+
+```bash
+python run_migrations.py --with-seeds && uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
 Docs:
